@@ -43,8 +43,11 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -64,6 +67,16 @@ public final class Dashboard extends Activity {
     private static final DateTimeFormatter SESSION_TIME = DateTimeFormatter.ofPattern("d MMM HH:mm:ss", Usage.TR);
 
     private final ExecutorService queries = Executors.newSingleThreadExecutor();
+    private final ExecutorService usageQueries = Executors.newFixedThreadPool(2);
+    private final Map<String, UsagePage> usagePages = new LinkedHashMap<>();
+    private final Map<Integer, View> tabPreviews = new LinkedHashMap<>();
+    private final Set<String> loadingPages = new HashSet<>();
+    private int usageGeneration;
+    private String awaitedPage;
+    private String pendingTabPage;
+    private int pendingTab = -1;
+    private SessionSnapshot latestSession;
+    private boolean preloadingSession;
     private final PathInterpolator easeOut = new PathInterpolator(0.2f, 0f, 0f, 1f);
     private final PathInterpolator easeIn = new PathInterpolator(0.4f, 0f, 1f, 1f);
     private Future<?> request;
@@ -86,6 +99,7 @@ public final class Dashboard extends Activity {
     private boolean visible;
     private int sessionMetric = SessionMeter.TOTAL;
     private long historyId;
+    private boolean historyOpen;
     private long alertEnd;
     private long alertDuration;
 
@@ -116,6 +130,7 @@ public final class Dashboard extends Activity {
             selectedBar = saved.getInt("selectedBar", -1);
             sessionMetric = saved.getInt("sessionMetric", SessionMeter.TOTAL);
             historyId = saved.getLong("historyId");
+            historyOpen = saved.getBoolean("historyOpen");
             alertEnd = saved.getLong("alertEnd");
             alertDuration = saved.getLong("alertDuration");
             drawerOpen = saved.getBoolean("drawerOpen");
@@ -138,6 +153,7 @@ public final class Dashboard extends Activity {
         if (intent != null && SessionService.OPEN_SESSION.equals(intent.getAction())) {
             tab = SESSION_TAB;
             historyId = 0;
+            historyOpen = false;
             drawerOpen = false;
             settingsPage = SettingsPage.NONE;
             app = null;
@@ -181,6 +197,7 @@ public final class Dashboard extends Activity {
         state.putInt("selectedBar", selectedBar);
         state.putInt("sessionMetric", sessionMetric);
         state.putLong("historyId", historyId);
+        state.putBoolean("historyOpen", historyOpen);
         state.putLong("alertEnd", alertEnd);
         state.putLong("alertDuration", alertDuration);
         state.putBoolean("drawerOpen", drawerOpen);
@@ -194,6 +211,7 @@ public final class Dashboard extends Activity {
     @Override protected void onDestroy() {
         revision++;
         queries.shutdownNow();
+        usageQueries.shutdownNow();
         super.onDestroy();
     }
 
@@ -203,8 +221,9 @@ public final class Dashboard extends Activity {
         } else if (settingsPage != SettingsPage.NONE) {
             showSettingsPage(SettingsPage.NONE);
         } else if (tab == SESSION_TAB && historyId > 0) {
-            historyId = 0;
-            sessionMetric = SessionMeter.TOTAL;
+            openSessionHistory();
+        } else if (tab == SESSION_TAB && historyOpen) {
+            historyOpen = false;
             render();
         } else if (app != null) {
             app = null;
@@ -224,6 +243,10 @@ public final class Dashboard extends Activity {
     private void render(int tabDirection) {
         if (request != null) request.cancel(true);
         int token = ++revision;
+        awaitedPage = null;
+        pendingTabPage = null;
+        pendingTab = -1;
+        tabPreviews.clear();
         root = new FrameLayout(this);
         drawer = null;
         swipeLayout = null;
@@ -257,7 +280,7 @@ public final class Dashboard extends Activity {
         TextView identity = label(getString(R.string.app_name), 21, colors.text, true);
         identity.setPadding(dp(8), 0, dp(4), 0);
         header.addView(identity, new LinearLayout.LayoutParams(0, -2, 1));
-        header.addView(iconButton(R.drawable.ic_refresh, "Yenile", this::render), touchTarget());
+        header.addView(iconButton(R.drawable.ic_refresh, "Yenile", this::refresh), touchTarget());
         main.addView(header);
 
         ScrollView scroll = new UsageScrollView(this, colors.accent);
@@ -267,8 +290,9 @@ public final class Dashboard extends Activity {
         content.setPadding(dp(16), dp(2), dp(16), dp(20));
         scroll.addView(content);
         boolean usageAllowed = Usage.allowed(this);
-        if (usageAllowed && tab != ALERT_TAB) {
-            swipeLayout = new TabSwipeLayout(this, offset -> selectTab(tab + offset));
+        if (usageAllowed && tab != ALERT_TAB && !historyOpen && historyId == 0) {
+            swipeLayout = new TabSwipeLayout(this, offset -> previewTab(tab + offset),
+                    offset -> selectTab(tab + offset, false));
             swipeLayout.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
             main.addView(swipeLayout, new LinearLayout.LayoutParams(-1, 0, 1));
         } else {
@@ -293,15 +317,37 @@ public final class Dashboard extends Activity {
             showAlert(token);
             return;
         }
-        if (tab == SESSION_TAB) {
-            new SessionPanel(token).show();
+        if (tab == SESSION_TAB && historyOpen) {
+            renderSessionHistory(token);
             return;
         }
         ZonedDateTime snapshot = ZonedDateTime.now();
+        if (tab != SESSION_TAB) drawUsageTab(tab, app, snapshot, true);
+        preloadAdjacent(snapshot);
+        if (tab == SESSION_TAB) {
+            new SessionPanel(token).show();
+        }
+        prepareTabPreviews();
+    }
+
+    private void drawUsageTab(int target, Usage.App selectedApp, ZonedDateTime snapshot, boolean foreground) {
+        String key = usageKey(target, selectedApp, snapshot);
+        UsagePage page = usagePages.get(key);
+        if (foreground) loadUsagePage(target, selectedApp, snapshot);
+        if (page == null) {
+            if (foreground) {
+                awaitedPage = key;
+            }
+            showPageMessage("Kullanım verileri hazırlanıyor…");
+            return;
+        }
+        if (page.error) {
+            showPageMessage("Kullanım verileri okunamadı. Yenile’ye dokun.");
+            return;
+        }
         LocalDate today = snapshot.toLocalDate();
-        long now = snapshot.toInstant().toEpochMilli();
         ZoneId zone = snapshot.getZone();
-        if (tab == 1) {
+        if (target == 1) {
             if (app != null) content.addView(action("‹ Uygulamalara dön", () -> {
                 app = null;
                 selectedBar = -1;
@@ -311,13 +357,12 @@ public final class Dashboard extends Activity {
             heading.setPadding(dp(4), dp(8), dp(4), dp(8));
             content.addView(heading);
         }
-        LinearLayout chartPanel = tab == 1 && app == null ? null : card();
+        LinearLayout chartPanel = target == 1 && selectedApp == null ? null : card();
         LinearLayout chartSummary = chartPanel == null ? null : column();
         if (chartSummary != null) {
             chartPanel.addView(chartSummary);
-            chartSummary.addView(label(summaryTitle(tab, app != null, mode, daysBack, today), 14, colors.secondary, true));
         }
-        if (tab == 1) {
+        if (target == 1) {
             addSelector(chartPanel == null ? content : chartPanel, RANGES, range, value -> {
                 if (range != value) selectedBar = -1;
                 range = value;
@@ -331,82 +376,184 @@ public final class Dashboard extends Activity {
             });
             if (mode == 0) addDatePicker(chartPanel, today, zone);
         }
-        ProgressBar progress = new ProgressBar(this);
-        progress.setIndeterminateTintList(ColorStateList.valueOf(colors.accent));
-        LinearLayout.LayoutParams progressLayout = new LinearLayout.LayoutParams(dp(28), dp(28));
-        progressLayout.gravity = Gravity.CENTER_HORIZONTAL;
-        progressLayout.setMargins(0, dp(24), 0, dp(16));
-        (chartPanel == null ? content : chartPanel).addView(progress, progressLayout);
-        if (tab == 0) {
-            addPlanCard(token, snapshot);
+        if (chartPanel == null) showApps(page.apps, range);
+        else showChart(chartPanel, chartSummary, page.periods, page.total, target, selectedApp, snapshot);
+        if (target == 0) {
+            addPreparedPlanCard(page.plan);
             if (!getSystemService(NotificationManager.class).areNotificationsEnabled()) {
                 LinearLayout notifications = card();
                 notifications.addView(label("Bildirimler kapalı", 15, colors.warning, true));
                 notifications.addView(action("Bildirimleri aç", this::enableNotifications));
             }
         }
+    }
 
-        int selectedTab = tab;
-        int selectedMode = mode;
-        int selectedRange = range;
-        int selectedDay = daysBack;
-        Usage.App selectedApp = app;
-        request = queries.submit(() -> {
-            try {
-                if (selectedTab == 1 && selectedApp == null) {
-                    long start = now - RANGE_HOURS[selectedRange] * Usage.HOUR;
-                    Map<Integer, Long> counts = Usage.apps(this, start, now);
-                    List<Usage.App> rows = Usage.rankedUserApps(this, counts);
-                    updated(token, progress, () -> showApps(rows, selectedRange));
-                    return;
+    private void showPageMessage(String message) {
+        paragraph(card(), message);
+    }
+
+    private View previewTab(int target) {
+        if (target < 0 || target >= TAB_NAMES.length) return null;
+        View prepared = tabPreviews.get(target);
+        return prepared == null ? buildTabPreview(target) : prepared;
+    }
+
+    private void prepareTabPreviews() {
+        if (swipeLayout == null) return;
+        TabSwipeLayout pager = swipeLayout;
+        pager.post(() -> {
+            if (pager != swipeLayout || isDestroyed()) return;
+            ZonedDateTime now = ZonedDateTime.now();
+            for (int target : new int[]{tab - 1, tab + 1}) {
+                if (target >= 0 && target < TAB_NAMES.length && !tabPreviews.containsKey(target)
+                        && (target == SESSION_TAB ? latestSession != null : usagePages.containsKey(usageKey(target, null, now)))) {
+                    tabPreviews.put(target, buildTabPreview(target));
                 }
-                int uid = selectedTab == 2 ? Usage.HOTSPOT : selectedApp == null ? Integer.MIN_VALUE : selectedApp.uid;
-                List<Period> periods;
-                if (selectedApp != null) {
-                    long start = now - RANGE_HOURS[selectedRange] * Usage.HOUR;
-                    periods = rollingPeriods(start, now, zone, selectedRange);
-                } else {
-                    periods = periods(today, zone, selectedMode, selectedDay);
-                }
-                Long spanTotal = populatePeriods(periods, now, (start, end) -> read(uid, start, end));
-                if (spanTotal == null || Thread.currentThread().isInterrupted()) return;
-                updated(token, progress, () -> showChart(chartPanel, chartSummary, periods, spanTotal, selectedTab,
-                        selectedApp, snapshot));
-            } catch (RuntimeException error) {
-                android.util.Log.w("MobilVeri", "Kullanım verileri okunamadı", error);
-                updated(token, progress, () -> paragraph(chartPanel == null ? card() : chartPanel,
-                        "Mobil veri kayıtları okunamadı. Kullanım erişimini kontrol edip Yenile’ye dokun."));
             }
         });
     }
 
+    private View buildTabPreview(int target) {
+        ScrollView preview = new UsageScrollView(this, colors.accent);
+        preview.setBackgroundColor(colors.background);
+        preview.setFillViewport(true);
+        preview.setVerticalScrollBarEnabled(false);
+        LinearLayout previewContent = column();
+        previewContent.setPadding(dp(16), dp(2), dp(16), dp(20));
+        preview.addView(previewContent);
+        LinearLayout originalContent = content;
+        TabSwipeLayout originalSwipe = swipeLayout;
+        Usage.App originalApp = app;
+        int originalBar = selectedBar;
+        int originalMetric = sessionMetric;
+        content = previewContent;
+        swipeLayout = null;
+        app = null;
+        selectedBar = -1;
+        sessionMetric = SessionMeter.TOTAL;
+        try {
+            if (target == SESSION_TAB) new SessionPanel(revision).show(false);
+            else drawUsageTab(target, null, ZonedDateTime.now(), false);
+        } finally {
+            content = originalContent;
+            swipeLayout = originalSwipe;
+            app = originalApp;
+            selectedBar = originalBar;
+            sessionMetric = originalMetric;
+        }
+        return preview;
+    }
+
+    private void refresh() {
+        usageGeneration++;
+        usagePages.clear();
+        loadingPages.clear();
+        latestSession = null;
+        render();
+    }
+
+    private String usageKey(int target, Usage.App selectedApp, ZonedDateTime snapshot) {
+        String period = target == 1 ? range + ":" + (selectedApp == null ? "all" : selectedApp.uid)
+                : mode + ":" + daysBack;
+        return target + ":" + period + ":" + snapshot.toLocalDate() + ":" + snapshot.getZone();
+    }
+
+    private void preloadAdjacent(ZonedDateTime snapshot) {
+        for (int offset : new int[]{-1, 1, -2, 2, -3, 3}) {
+            int target = tab + offset;
+            if (target >= 0 && target < SESSION_TAB) loadUsagePage(target, null, snapshot);
+        }
+        if (tab != SESSION_TAB) preloadLatestSession();
+    }
+
+    private void loadUsagePage(int selectedTab, Usage.App selectedApp, ZonedDateTime snapshot) {
+        String key = usageKey(selectedTab, selectedApp, snapshot);
+        UsagePage cached = usagePages.get(key);
+        if (cached != null && SystemClock.elapsedRealtime() - cached.loadedAt < 60_000) return;
+        if (!loadingPages.add(key)) return;
+        int generation = usageGeneration;
+        int selectedMode = mode;
+        int selectedRange = range;
+        int selectedDay = daysBack;
+        usageQueries.execute(() -> {
+            UsagePage page;
+            try {
+                page = readUsagePage(selectedTab, selectedApp, snapshot, selectedMode, selectedRange, selectedDay);
+            } catch (RuntimeException error) {
+                android.util.Log.w("MobilVeri", "Kullanım verileri okunamadı", error);
+                page = new UsagePage(null, 0, null, null, true);
+            }
+            UsagePage result = page;
+            runOnUiThread(() -> {
+                if (generation != usageGeneration || isDestroyed()) return;
+                loadingPages.remove(key);
+                usagePages.put(key, result);
+                if (usagePages.size() > 12) usagePages.remove(usagePages.keySet().iterator().next());
+                if (visible && key.equals(pendingTabPage)) selectTab(pendingTab, true);
+                else if (visible && pendingTab < 0 && key.equals(awaitedPage)) {
+                    int token = revision;
+                    Runnable update = () -> {
+                        if (visible && token == revision && pendingTab < 0) render();
+                    };
+                    if (swipeLayout == null) update.run();
+                    else swipeLayout.whenGestureEnds(update);
+                } else prepareTabPreviews();
+            });
+        });
+    }
+
+    private UsagePage readUsagePage(int target, Usage.App selectedApp, ZonedDateTime snapshot,
+                                   int selectedMode, int selectedRange, int selectedDay) {
+        long now = snapshot.toInstant().toEpochMilli();
+        long start = now - RANGE_HOURS[selectedRange] * Usage.HOUR;
+        if (target == 1 && selectedApp == null) {
+            return new UsagePage(null, 0, Usage.rankedUserApps(this, Usage.apps(this, start, now)), null, false);
+        }
+        int uid = target == 2 ? Usage.HOTSPOT : selectedApp == null ? Integer.MIN_VALUE : selectedApp.uid;
+        ZoneId zone = snapshot.getZone();
+        List<Period> series = selectedApp == null ? periods(snapshot.toLocalDate(), zone, selectedMode, selectedDay)
+                : rollingPeriods(start, now, zone, selectedRange);
+        Long total = populatePeriods(series, now, (from, to) -> read(uid, from, to));
+        if (total == null) throw new IllegalStateException("Usage query interrupted");
+        DataPlan.Snapshot plan = null;
+        if (target == 0) {
+            DataPlan configured = DataPlan.load(this);
+            try {
+                if (configured.capacity > 0) plan = configured.read(this, snapshot);
+            } catch (RuntimeException error) {
+                android.util.Log.w("DataWarner", "Paket verisi okunamadı", error);
+            }
+        }
+        return new UsagePage(series, total, null, plan, false);
+    }
+
+    private static final class UsagePage {
+        final List<Period> periods;
+        final long total;
+        final List<Usage.App> apps;
+        final DataPlan.Snapshot plan;
+        final boolean error;
+        final long loadedAt = SystemClock.elapsedRealtime();
+
+        UsagePage(List<Period> periods, long total, List<Usage.App> apps, DataPlan.Snapshot plan, boolean error) {
+            this.periods = periods;
+            this.total = total;
+            this.apps = apps;
+            this.plan = plan;
+            this.error = error;
+        }
+    }
+
     private void addPlanCard(int token, ZonedDateTime now) {
         LinearLayout panel = card();
-        LinearLayout heading = row();
-        heading.addView(label("Mobil veri paketi", 17, colors.text, true), new LinearLayout.LayoutParams(0, -2, 1));
         DataPlan plan = DataPlan.load(this);
-        heading.addView(action(plan.capacity == 0 ? "Ayarla" : "Düzenle", this::editPlan));
-        panel.addView(heading);
-        TextView details = label(plan.capacity == 0 ? "Paket boyutunu ve yenilenme gününü gir." : "Paket hesaplanıyor…",
-                14, colors.secondary, false);
-        panel.addView(details);
+        TextView details = planHeading(panel, plan, "Paket hesaplanıyor…");
         if (plan.capacity == 0) return;
         queries.submit(() -> {
             try {
                 DataPlan.Snapshot value = plan.read(this, now);
                 runOnUiThread(() -> {
-                    if (token != revision || isDestroyed()) return;
-                    details.setText(Usage.format(value.remaining()) + " kaldı");
-                    details.setTextColor(colors.text);
-                    details.setTextSize(24);
-                    details.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-                    ProgressBar progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-                    progress.setProgressTintList(ColorStateList.valueOf(value.level() > 0 ? colors.warning : colors.accent));
-                    progress.setProgress(value.percent());
-                    panel.addView(progress);
-                    paragraph(panel, "Paket " + Usage.format(value.capacity) + " · Yenileme " + value.next.format(DATE)
-                            + " (" + value.days + " gün)"
-                            + "\nGünlük bütçe " + Usage.format(value.perDay()) + " · Android ölçümü");
+                    if (token == revision && !isDestroyed()) showPlanSnapshot(panel, details, value);
                 });
             } catch (RuntimeException error) {
                 runOnUiThread(() -> {
@@ -414,6 +561,36 @@ public final class Dashboard extends Activity {
                 });
             }
         });
+    }
+
+    private void addPreparedPlanCard(DataPlan.Snapshot snapshot) {
+        LinearLayout panel = card();
+        TextView details = planHeading(panel, DataPlan.load(this), "Paket verisi şu anda okunamadı.");
+        if (snapshot != null) showPlanSnapshot(panel, details, snapshot);
+    }
+
+    private TextView planHeading(LinearLayout panel, DataPlan plan, String status) {
+        LinearLayout heading = row();
+        heading.addView(label("Mobil veri paketi", 17, colors.text, true), new LinearLayout.LayoutParams(0, -2, 1));
+        heading.addView(action(plan.capacity == 0 ? "Ayarla" : "Düzenle", this::editPlan));
+        panel.addView(heading);
+        TextView details = label(plan.capacity == 0 ? "Paket boyutunu ve yenilenme gününü gir." : status,
+                14, colors.secondary, false);
+        panel.addView(details);
+        return details;
+    }
+
+    private void showPlanSnapshot(LinearLayout panel, TextView details, DataPlan.Snapshot value) {
+        details.setText(Usage.format(value.remaining()) + " kaldı");
+        details.setTextColor(colors.text);
+        details.setTextSize(24);
+        details.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        ProgressBar progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        progress.setProgressTintList(ColorStateList.valueOf(value.level() > 0 ? colors.warning : colors.accent));
+        progress.setProgress(value.percent());
+        panel.addView(progress);
+        paragraph(panel, "Paket " + Usage.format(value.capacity) + " · Yenileme " + value.next.format(DATE)
+                + " (" + value.days + " gün)\nGünlük bütçe " + Usage.format(value.perDay()) + " · Android ölçümü");
     }
 
     private void editPlan() {
@@ -443,7 +620,7 @@ public final class Dashboard extends Activity {
     private void savePlan(DataPlan plan) {
         plan.save(this);
         PlanWidget.requestUpdate(this);
-        render();
+        refresh();
     }
 
     private void showAlert(int token) {
@@ -524,15 +701,34 @@ public final class Dashboard extends Activity {
     }
 
     private void selectTab(int target) {
+        selectTab(target, true);
+    }
+
+    private void selectTab(int target, boolean animate) {
         if (target < 0 || target >= TAB_NAMES.length) return;
-        if (target == tab && app == null && historyId == 0) return;
+        pendingTab = -1;
+        pendingTabPage = null;
+        if (target == tab && app == null && historyId == 0 && !historyOpen) return;
+        ZonedDateTime now = ZonedDateTime.now();
+        if (target != SESSION_TAB && !usagePages.containsKey(usageKey(target, null, now))) {
+            pendingTab = target;
+            pendingTabPage = usageKey(target, null, now);
+            loadUsagePage(target, null, now);
+            return;
+        }
+        if (target == SESSION_TAB && tab != SESSION_TAB && latestSession == null) {
+            pendingTab = target;
+            preloadLatestSession();
+            return;
+        }
         int direction = Integer.compare(target, tab);
         selectedBar = -1;
         tab = target;
         historyId = 0;
+        historyOpen = false;
         sessionMetric = SessionMeter.TOTAL;
         app = null;
-        render(direction);
+        render(animate ? direction : 0);
     }
 
     private void openDrawer() {
@@ -809,15 +1005,6 @@ public final class Dashboard extends Activity {
         if (code == 1) render();
     }
 
-    private void updated(int token, View progress, Runnable show) {
-        runOnUiThread(() -> {
-            if (token == revision && !isFinishing() && !isDestroyed()) {
-                ((LinearLayout) progress.getParent()).removeView(progress);
-                show.run();
-            }
-        });
-    }
-
     private void openUsageSettings() {
         try {
             startActivity(new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS));
@@ -1034,6 +1221,134 @@ public final class Dashboard extends Activity {
         }
     }
 
+    private static final class SessionSnapshot {
+        final int revision;
+        final SessionMeter.State state;
+        final List<Usage.App> apps;
+
+        SessionSnapshot(int revision, SessionMeter.State state, List<Usage.App> apps) {
+            this.revision = revision;
+            this.state = state;
+            this.apps = apps;
+        }
+    }
+
+    private SessionSnapshot readSession(long wanted, int version) {
+        try (SessionMeter meter = new SessionMeter(this)) {
+            SessionMeter.State state = meter.read(wanted);
+            return new SessionSnapshot(version, state, Usage.rankedUserApps(this, state.appAmounts()));
+        }
+    }
+
+    private void preloadLatestSession() {
+        int version = SessionService.revision();
+        if (preloadingSession || (latestSession != null && latestSession.revision == version)) return;
+        preloadingSession = true;
+        int generation = usageGeneration;
+        queries.execute(() -> {
+            SessionSnapshot result = null;
+            try {
+                result = readSession(0, version);
+            } catch (RuntimeException failure) {
+                android.util.Log.w("DataWarner", "Sayaç önceden okunamadı", failure);
+            }
+            SessionSnapshot snapshot = result;
+            runOnUiThread(() -> {
+                preloadingSession = false;
+                if (isDestroyed() || generation != usageGeneration) return;
+                if (snapshot != null) latestSession = snapshot;
+                if (visible && pendingTab == SESSION_TAB) {
+                    if (latestSession != null) selectTab(SESSION_TAB, true);
+                    else {
+                        pendingTab = -1;
+                        tab = SESSION_TAB;
+                        render(1);
+                    }
+                } else prepareTabPreviews();
+            });
+        });
+    }
+
+    private void openSessionHistory() {
+        historyId = 0;
+        historyOpen = true;
+        sessionMetric = SessionMeter.TOTAL;
+        render();
+    }
+
+    private void renderSessionHistory(int token) {
+        LinearLayout heading = row();
+        heading.addView(iconButton(R.drawable.ic_previous, "Sayaca dön", () -> {
+            historyOpen = false;
+            render();
+        }), touchTarget());
+        TextView title = label("Sayaç geçmişi", 21, colors.text, true);
+        title.setAccessibilityHeading(true);
+        heading.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+        content.addView(heading);
+        LinearLayout list = card();
+        paragraph(list, "Geçmiş yükleniyor…");
+        request = queries.submit(() -> {
+            try (SessionMeter meter = new SessionMeter(this)) {
+                List<SessionMeter.Entry> entries = meter.history();
+                runOnUiThread(() -> {
+                    if (token != revision || isDestroyed()) return;
+                    list.removeAllViews();
+                    if (entries.isEmpty()) {
+                        paragraph(list, "Henüz kayıtlı ölçüm yok.");
+                        return;
+                    }
+                    list.addView(settingsLink("Tümünü sil", entries.size() + " kayıt", 0, () -> confirmDeleteHistory(0)));
+                    ZoneId zone = ZoneId.systemDefault();
+                    for (SessionMeter.Entry entry : entries) {
+                        String time = Instant.ofEpochMilli(entry.started).atZone(zone).format(SESSION_TIME);
+                        LinearLayout item = row();
+                        item.addView(settingsLink(entry.title.isEmpty() ? "Veri ölçümü" : entry.title, time, 0, () -> {
+                            historyOpen = false;
+                            historyId = entry.id;
+                            sessionMetric = SessionMeter.TOTAL;
+                            render();
+                        }), new LinearLayout.LayoutParams(0, -2, 1));
+                        item.addView(action("Sil", () -> confirmDeleteHistory(entry.id), true, time + " ölçümünü sil"));
+                        list.addView(item);
+                    }
+                });
+            } catch (RuntimeException error) {
+                runOnUiThread(() -> {
+                    if (token != revision || isDestroyed()) return;
+                    list.removeAllViews();
+                    paragraph(list, "Sayaç geçmişi okunamadı.");
+                });
+            }
+        });
+    }
+
+    private void confirmDeleteHistory(long id) {
+        new AlertDialog.Builder(this).setTitle(id == 0 ? "Tüm geçmiş silinsin mi?" : "Ölçüm silinsin mi?")
+                .setMessage("Silinen ölçümler geri alınamaz.")
+                .setNegativeButton("Vazgeç", null)
+                .setPositiveButton("Sil", (dialog, button) -> updateSessionStorage(meter -> meter.deleteHistory(id)))
+                .show();
+    }
+
+    private void updateSessionStorage(Consumer<SessionMeter> change) {
+        queries.execute(() -> {
+            try (SessionMeter meter = new SessionMeter(this)) {
+                change.accept(meter);
+                runOnUiThread(() -> {
+                    if (isDestroyed()) return;
+                    latestSession = null;
+                    if (visible && tab == SESSION_TAB && settingsPage == SettingsPage.NONE) render();
+                });
+            } catch (RuntimeException failure) {
+                runOnUiThread(() -> {
+                    if (!isDestroyed()) android.widget.Toast.makeText(this, "Sayaç kaydı güncellenemedi.",
+                            android.widget.Toast.LENGTH_SHORT).show();
+                });
+            }
+        });
+    }
+
     private final class SessionPanel {
         private final int token;
         private LinearLayout results;
@@ -1042,6 +1357,7 @@ public final class Dashboard extends Activity {
         private TextView pace;
         private TextView status;
         private TextView toggle;
+        private TextView reset;
         private SessionMeter.State state;
         private List<Usage.App> apps = new ArrayList<>();
         private int seenRevision = Integer.MIN_VALUE;
@@ -1053,6 +1369,15 @@ public final class Dashboard extends Activity {
         }
 
         void show() {
+            show(true);
+        }
+
+        void show(boolean foreground) {
+            if (historyId == 0 && latestSession != null) {
+                state = latestSession.state;
+                apps = latestSession.apps;
+                seenRevision = latestSession.revision;
+            }
             LinearLayout banner = card();
             banner.addView(label("Veri sayacı", 18, colors.text, true));
             clock = label("00:00", 38, colors.text, true);
@@ -1078,17 +1403,22 @@ public final class Dashboard extends Activity {
             actions.addView(toggle, new LinearLayout.LayoutParams(0, -2, 1));
             if (historyId > 0) {
                 toggle.setVisibility(View.GONE);
-                actions.addView(action("Son ölçüme dön", () -> {
-                    historyId = 0;
-                    sessionMetric = SessionMeter.TOTAL;
-                    render();
-                }), new LinearLayout.LayoutParams(0, -2, 1));
+                actions.addView(action("Geçmişe dön", Dashboard.this::openSessionHistory),
+                        new LinearLayout.LayoutParams(0, -2, 1));
+            } else {
+                actions.addView(action("Geçmiş", Dashboard.this::openSessionHistory, true, "Oturum geçmişi"));
             }
-            actions.addView(action("Geçmiş", this::openHistory, true, "Oturum geçmişi"));
             banner.addView(actions);
+            reset = action("Sayacı sıfırla", this::resetCounter);
+            reset.setVisibility(View.GONE);
+            if (historyId == 0) banner.addView(reset);
             results = column();
             content.addView(results);
-            tick();
+            if (state != null) {
+                updateControls();
+                showResults();
+            }
+            if (foreground) tick();
         }
 
         private void tick() {
@@ -1098,15 +1428,15 @@ public final class Dashboard extends Activity {
                 loading = true;
                 long wanted = historyId;
                 request = queries.submit(() -> {
-                    try (SessionMeter meter = new SessionMeter(Dashboard.this)) {
-                        SessionMeter.State latest = meter.read(wanted);
-                        List<Usage.App> ranked = Usage.rankedUserApps(Dashboard.this, latest.appAmounts());
+                    try {
+                        SessionSnapshot latest = readSession(wanted, current);
                         runOnUiThread(() -> {
                             if (token != revision || isDestroyed()) return;
                             loading = false;
                             seenRevision = current;
-                            state = latest;
-                            apps = ranked;
+                            state = latest.state;
+                            apps = latest.apps;
+                            if (wanted == 0) latestSession = latest;
                             if (sessionMetric != SessionMeter.TOTAL && sessionMetric != Usage.HOTSPOT
                                     && apps.stream().noneMatch(item -> item.uid == sessionMetric)) {
                                 sessionMetric = SessionMeter.TOTAL;
@@ -1136,6 +1466,8 @@ public final class Dashboard extends Activity {
             boolean hasPoints = state != null && !state.points.isEmpty();
             boolean running = historyId == 0 && phase == SessionService.RUNNING;
             boolean available = phase == SessionService.IDLE || running;
+            reset.setVisibility(historyId == 0 && (hasPoints || running) ? View.VISIBLE : View.GONE);
+            reset.setEnabled(available);
             toggle.setEnabled(available);
             toggle.setAlpha(available ? 1f : 0.62f);
             toggle.setText(running ? "Bitir" : hasPoints ? "Yeni ölçüm başlat" : "Başlat");
@@ -1152,6 +1484,7 @@ public final class Dashboard extends Activity {
             String error = SessionService.error();
             if (error != null) status.setText(error);
             else if (unavailable) status.setText("Sayaç kaydı okunamadı. Yenile’ye dokun.");
+            else if (state == null) status.setText("Sayaç verileri hazırlanıyor…");
             else if (historyId == 0 && phase == SessionService.STARTING) status.setText("Ölçüm başlatılıyor…");
             else if (historyId == 0 && phase == SessionService.STOPPING) status.setText("Son ölçüm kaydediliyor…");
             else if (running) status.setText("Ölçüm sürüyor · Mobil veri");
@@ -1215,36 +1548,19 @@ public final class Dashboard extends Activity {
             });
         }
 
-        private void openHistory() {
-            queries.execute(() -> {
-                try (SessionMeter meter = new SessionMeter(Dashboard.this)) {
-                    List<SessionMeter.Entry> history = meter.history();
-                    runOnUiThread(() -> {
-                        if (token != revision || !visible || isFinishing()) return;
-                        AlertDialog.Builder dialog = new AlertDialog.Builder(Dashboard.this)
-                                .setTitle("Oturum geçmişi").setNegativeButton("Kapat", null);
-                        if (history.isEmpty()) dialog.setMessage("Henüz kayıtlı ölçüm yok.");
-                        else {
-                            String[] entries = new String[history.size()];
-                            for (int i = 0; i < entries.length; i++) {
-                                SessionMeter.Entry item = history.get(i);
-                                String date = Instant.ofEpochMilli(item.started).atZone(ZoneId.systemDefault()).format(SESSION_TIME);
-                                entries[i] = item.title.isEmpty() ? date : item.title + " · " + date;
-                            }
-                            dialog.setItems(entries, (d, index) -> {
-                                historyId = history.get(index).id;
-                                sessionMetric = SessionMeter.TOTAL;
-                                render();
-                            });
+        private void resetCounter() {
+            boolean running = SessionService.phase() == SessionService.RUNNING;
+            long id = state == null ? 0 : state.id;
+            new AlertDialog.Builder(Dashboard.this).setTitle("Sayaç sıfırlansın mı?")
+                    .setMessage(running ? "Ölçüm durdurulup geçmişe kaydedilecek." : "Sayaç sıfırlanacak. Ölçüm geçmişte kalacak.")
+                    .setNegativeButton("Vazgeç", null).setPositiveButton("Sıfırla", (dialog, button) -> {
+                        if (SessionService.phase() == SessionService.RUNNING) {
+                            latestSession = null;
+                            SessionService.resetRunning(Dashboard.this);
+                        } else if (SessionService.phase() == SessionService.IDLE && id > 0) {
+                            updateSessionStorage(meter -> meter.resetDisplay(id));
                         }
-                        dialog.show();
-                    });
-                } catch (RuntimeException error) {
-                    runOnUiThread(() -> {
-                        if (token == revision) status.setText("Oturum geçmişi okunamadı.");
-                    });
-                }
-            });
+                    }).show();
         }
 
         private void nameSession(long id, String name) {
@@ -1259,6 +1575,7 @@ public final class Dashboard extends Activity {
                             try (SessionMeter meter = new SessionMeter(Dashboard.this)) {
                                 meter.rename(id, title);
                                 runOnUiThread(() -> {
+                                    latestSession = null;
                                     if (token == revision) seenRevision = Integer.MIN_VALUE;
                                 });
                             } catch (RuntimeException error) {
@@ -1302,7 +1619,8 @@ public final class Dashboard extends Activity {
         if (app.icon != null) {
             ImageView image = new ImageView(this);
             image.setScaleType(ImageView.ScaleType.FIT_CENTER);
-            image.setImageDrawable(app.icon);
+            android.graphics.drawable.Drawable.ConstantState state = app.icon.getConstantState();
+            image.setImageDrawable(state == null ? app.icon : state.newDrawable(getResources()).mutate());
             icon = image;
         } else {
             String initial = app.name.isEmpty() ? "•"

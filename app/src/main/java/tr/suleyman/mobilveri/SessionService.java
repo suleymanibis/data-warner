@@ -28,6 +28,7 @@ public final class SessionService extends Service {
     private static final String CHANNEL = "session";
     private static final String START = "start_measurement";
     private static final String STOP = "stop_measurement";
+    private static final String RESET = "reset_measurement";
     private static final AtomicInteger REVISION = new AtomicInteger();
     private static volatile int phase = IDLE;
     private static volatile String error;
@@ -41,11 +42,20 @@ public final class SessionService extends Service {
     static String error() { return error; }
 
     static void toggle(Context context) {
+        command(context, false);
+    }
+
+    static void resetRunning(Context context) {
+        command(context, true);
+    }
+
+    private static void command(Context context, boolean reset) {
         int before = phase;
         if (before != IDLE && before != RUNNING) return;
+        if (reset && before != RUNNING) return;
         boolean start = before == IDLE;
         SessionMeter.Point point = SessionMeter.Point.capture();
-        Intent command = new Intent(context, SessionService.class).setAction(start ? START : STOP)
+        Intent command = new Intent(context, SessionService.class).setAction(start ? START : reset ? RESET : STOP)
                 .putExtra("elapsed", point.elapsed).putExtra("wall", point.wall).putExtra("mobile", point.mobile);
         error = null;
         updatePhase(start ? STARTING : STOPPING);
@@ -73,8 +83,8 @@ public final class SessionService extends Service {
             } catch (RuntimeException failure) {
                 fail(failure);
             }
-        } else if (STOP.equals(command.getAction())) {
-            worker.execute(() -> finish(point, startId));
+        } else if (STOP.equals(command.getAction()) || RESET.equals(command.getAction())) {
+            worker.execute(() -> finish(point, startId, RESET.equals(command.getAction())));
         }
         return START_NOT_STICKY;
     }
@@ -125,9 +135,10 @@ public final class SessionService extends Service {
         }
     }
 
-    private void finish(SessionMeter.Point point, int startId) {
+    private void finish(SessionMeter.Point point, int startId, boolean reset) {
         try (SessionMeter meter = new SessionMeter(this)) {
             meter.end(sessionId, withApps(point));
+            if (reset) meter.resetDisplay(sessionId);
             REVISION.incrementAndGet();
             stopForeground(STOP_FOREGROUND_REMOVE);
             stopSelf(startId);

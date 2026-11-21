@@ -18,9 +18,11 @@ import java.util.Map;
 
 final class SessionMeter extends SQLiteOpenHelper {
     static final int TOTAL = Integer.MIN_VALUE;
+    private final android.content.SharedPreferences display;
 
     SessionMeter(Context context) {
         super(context, "sessions.db", null, 2);
+        display = context.getSharedPreferences("session_display", Context.MODE_PRIVATE);
     }
 
     @Override public void onCreate(SQLiteDatabase db) {
@@ -92,8 +94,8 @@ final class SessionMeter extends SQLiteOpenHelper {
         db.beginTransactionNonExclusive();
         try {
             try (Cursor row = db.rawQuery("SELECT id, active, title, completed FROM session "
-                    + (wanted > 0 ? "WHERE id = ? " : "") + "ORDER BY id DESC LIMIT 1",
-                    wanted > 0 ? new String[]{Long.toString(wanted)} : null)) {
+                    + (wanted > 0 ? "WHERE id = ? " : "WHERE id > ? ") + "ORDER BY id DESC LIMIT 1",
+                    new String[]{Long.toString(wanted > 0 ? wanted : display.getLong("reset_through", 0))})) {
                 if (row.moveToFirst()) {
                     id = row.getLong(0);
                     active = row.getInt(1) != 0;
@@ -117,7 +119,8 @@ final class SessionMeter extends SQLiteOpenHelper {
 
     List<Entry> history() {
         List<Entry> entries = new ArrayList<>();
-        try (Cursor rows = getReadableDatabase().rawQuery("SELECT id, title, started FROM session ORDER BY id DESC", null)) {
+        try (Cursor rows = getReadableDatabase().rawQuery(
+                "SELECT id, title, started FROM session WHERE active = 0 ORDER BY id DESC", null)) {
             while (rows.moveToNext()) entries.add(new Entry(rows.getLong(0), rows.getString(1), rows.getLong(2)));
         }
         return entries;
@@ -127,6 +130,25 @@ final class SessionMeter extends SQLiteOpenHelper {
         ContentValues value = new ContentValues();
         value.put("title", title);
         getWritableDatabase().update("session", value, "id = ?", new String[]{Long.toString(id)});
+    }
+
+    void resetDisplay(long id) {
+        getWritableDatabase().execSQL("UPDATE session SET active = 0 WHERE id = ? AND active = 1", new Object[]{id});
+        display.edit().putLong("reset_through", Math.max(id, display.getLong("reset_through", 0))).apply();
+    }
+
+    void deleteHistory(long id) {
+        SQLiteDatabase db = getWritableDatabase();
+        String selection = id == 0 ? "active = 0" : "active = 0 AND id = ?";
+        String[] arguments = id == 0 ? null : new String[]{Long.toString(id)};
+        db.beginTransaction();
+        try {
+            db.delete("point", "session_id IN (SELECT id FROM session WHERE " + selection + ")", arguments);
+            db.delete("session", selection, arguments);
+            db.setTransactionSuccessful();
+        } finally {
+            db.endTransaction();
+        }
     }
 
     private static void insert(SQLiteDatabase db, long id, Point point) {

@@ -88,12 +88,15 @@ final class Usage {
         String[] packages = pm.getPackagesForUid(uid);
         if (packages == null || packages.length == 0) return null;
         int systemFlags = ApplicationInfo.FLAG_SYSTEM | ApplicationInfo.FLAG_UPDATED_SYSTEM_APP;
+        android.content.Intent launcher = new android.content.Intent(android.content.Intent.ACTION_MAIN)
+                .addCategory(android.content.Intent.CATEGORY_LAUNCHER);
         List<String> labels = new ArrayList<>();
         Drawable icon = null;
         for (String name : packages) {
             try {
                 ApplicationInfo info = pm.getApplicationInfo(name, 0);
-                if ((info.flags & systemFlags) != 0) continue;
+                if ((info.flags & systemFlags) != 0
+                        && pm.queryIntentActivities(launcher.setPackage(name), 0).isEmpty()) continue;
                 String label = pm.getApplicationLabel(info).toString();
                 if (!labels.contains(label)) labels.add(label);
                 if (icon == null) icon = info.loadIcon(pm);
