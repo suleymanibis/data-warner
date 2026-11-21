@@ -54,7 +54,11 @@ public final class MobilVeriChecks {
         checkCustomAlert();
         checkDataPlan();
         checkSessionRate();
-        System.out.println("Schedule, chart periods, counter and formatting checks passed.");
+        check(TabSwipeLayout.direction(-80, 10, 56) == 1, "left swipe opens next tab");
+        check(TabSwipeLayout.direction(80, -10, 56) == -1, "right swipe opens previous tab");
+        check(TabSwipeLayout.direction(25, 0, 56) == 0, "short drag does not change tabs");
+        check(TabSwipeLayout.direction(60, 80, 56) == 0, "vertical scroll does not change tabs");
+        System.out.println("Schedule, chart periods, counter, formatting and swipe checks passed.");
     }
 
     private static void checkDataPlan() {

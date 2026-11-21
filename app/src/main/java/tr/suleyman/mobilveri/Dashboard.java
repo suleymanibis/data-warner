@@ -53,6 +53,8 @@ import java.util.function.Consumer;
 public final class Dashboard extends Activity {
     private static final int SESSION_TAB = 3;
     private static final int ALERT_TAB = 4;
+    private static final String[] TAB_NAMES = {"Genel", "Uygulamalar", "Hotspot", "Sayaç"};
+    private static final int[] TAB_ICONS = {R.drawable.ic_overview, R.drawable.ic_apps, R.drawable.ic_hotspot, R.drawable.ic_timer};
     private static final String[] MODES = {"Saatlik", "Günlük", "Haftalık"};
     private static final String[] RANGES = {"1 sa", "3 sa", "1 gün", "3 gün", "1 hafta", "1 ay"};
     private static final long[] RANGE_HOURS = {1, 3, 24, 72, 168, 720};
@@ -72,6 +74,8 @@ public final class Dashboard extends Activity {
     private boolean drawerOpen;
     private LinearLayout main;
     private LinearLayout content;
+    private TabSwipeLayout swipeLayout;
+    private SettingsPage settingsPage = SettingsPage.NONE;
     private int tab;
     private int mode;
     private int range = 2;
@@ -84,6 +88,21 @@ public final class Dashboard extends Activity {
     private long historyId;
     private long alertEnd;
     private long alertDuration;
+
+    private enum SettingsPage {
+        NONE("", 0),
+        NOTIFICATIONS("Bildirim Ayarları", R.drawable.ic_notification),
+        APPEARANCE("Görünüm Ayarları", R.drawable.ic_appearance),
+        PLAN("Mobil Veri Paketi", R.drawable.ic_plan);
+
+        final String title;
+        final int icon;
+
+        SettingsPage(String title, int icon) {
+            this.title = title;
+            this.icon = icon;
+        }
+    }
 
     @Override protected void onCreate(Bundle saved) {
         colors = new Appearance(Appearance.useLight(Appearance.mode(this), getResources().getConfiguration().uiMode));
@@ -100,6 +119,7 @@ public final class Dashboard extends Activity {
             alertEnd = saved.getLong("alertEnd");
             alertDuration = saved.getLong("alertDuration");
             drawerOpen = saved.getBoolean("drawerOpen");
+            settingsPage = SettingsPage.valueOf(saved.getString("settingsPage", SettingsPage.NONE.name()));
             if (saved.containsKey("app_uid")) {
                 app = new Usage.App(saved.getInt("app_uid"), saved.getString("app_name"), 0);
             }
@@ -119,6 +139,7 @@ public final class Dashboard extends Activity {
             tab = SESSION_TAB;
             historyId = 0;
             drawerOpen = false;
+            settingsPage = SettingsPage.NONE;
             app = null;
             intent.setAction(null);
         }
@@ -131,6 +152,7 @@ public final class Dashboard extends Activity {
                 alertEnd = end;
                 alertDuration = duration;
                 drawerOpen = false;
+                settingsPage = SettingsPage.NONE;
                 app = null;
             }
             intent.setAction(null);
@@ -162,6 +184,7 @@ public final class Dashboard extends Activity {
         state.putLong("alertEnd", alertEnd);
         state.putLong("alertDuration", alertDuration);
         state.putBoolean("drawerOpen", drawerOpen);
+        state.putString("settingsPage", settingsPage.name());
         if (app != null) {
             state.putInt("app_uid", app.uid);
             state.putString("app_name", app.name);
@@ -177,6 +200,8 @@ public final class Dashboard extends Activity {
     @Override public void onBackPressed() {
         if (drawer != null) {
             closeDrawer();
+        } else if (settingsPage != SettingsPage.NONE) {
+            showSettingsPage(SettingsPage.NONE);
         } else if (tab == SESSION_TAB && historyId > 0) {
             historyId = 0;
             sessionMetric = SessionMeter.TOTAL;
@@ -186,9 +211,7 @@ public final class Dashboard extends Activity {
             selectedBar = -1;
             render();
         } else if (tab != 0) {
-            tab = 0;
-            selectedBar = -1;
-            render();
+            selectTab(0);
         } else {
             super.onBackPressed();
         }
@@ -203,10 +226,15 @@ public final class Dashboard extends Activity {
         int token = ++revision;
         root = new FrameLayout(this);
         drawer = null;
+        swipeLayout = null;
         main = column();
         main.setBackgroundColor(colors.background);
         root.addView(main, new FrameLayout.LayoutParams(-1, -1));
         setContentView(root);
+        if (settingsPage != SettingsPage.NONE) {
+            renderSettingsPage();
+            return;
+        }
 
         LinearLayout header = row();
         header.setPadding(dp(12), dp(4), dp(12), dp(4));
@@ -238,14 +266,21 @@ public final class Dashboard extends Activity {
         content = column();
         content.setPadding(dp(16), dp(2), dp(16), dp(20));
         scroll.addView(content);
-        main.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        boolean usageAllowed = Usage.allowed(this);
+        if (usageAllowed && tab != ALERT_TAB) {
+            swipeLayout = new TabSwipeLayout(this, offset -> selectTab(tab + offset));
+            swipeLayout.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
+            main.addView(swipeLayout, new LinearLayout.LayoutParams(-1, 0, 1));
+        } else {
+            main.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        }
         if (tabDirection != 0 && ValueAnimator.areAnimatorsEnabled()) {
             scroll.setAlpha(0.65f);
             scroll.setTranslationX(dp(12) * tabDirection);
             scroll.animate().alpha(1f).translationX(0).setDuration(210).setInterpolator(easeOut).start();
         }
         if (drawerOpen) openDrawer();
-        if (!Usage.allowed(this)) {
+        if (!usageAllowed) {
             LinearLayout permission = card();
             permission.addView(label("Kullanım erişimi gerekli", 23, colors.text, true));
             paragraph(permission, "Mobil veri istatistiklerini okumak için Android ayarlarında Data Warner’a kullanım erişimi ver.");
@@ -434,8 +469,7 @@ public final class Dashboard extends Activity {
                 Long total = populatePeriods(periods, end, (a, b) -> Usage.total(this, a, b));
                 if (total == null || Thread.currentThread().isInterrupted()) return;
                 Map<Integer, Long> counts = Usage.apps(this, start, end);
-                counts.remove(Usage.HOTSPOT);
-                List<Usage.App> apps = Usage.ranked(this, counts);
+                List<Usage.App> apps = Usage.rankedUserApps(this, counts);
                 runOnUiThread(() -> {
                     if (token != revision || isDestroyed()) return;
                     detail.setText("Android kaydı · " + Usage.format(total));
@@ -463,9 +497,7 @@ public final class Dashboard extends Activity {
         nav.setBackgroundColor(colors.surface);
         nav.setPadding(dp(8), dp(4), dp(8), dp(4));
         nav.setElevation(dp(3));
-        String[] names = {"Genel", "Uygulamalar", "Hotspot", "Sayaç"};
-        int[] icons = {R.drawable.ic_overview, R.drawable.ic_apps, R.drawable.ic_hotspot, R.drawable.ic_timer};
-        for (int i = 0; i < names.length; i++) {
+        for (int i = 0; i < TAB_NAMES.length; i++) {
             int target = i;
             boolean selected = tab == i;
             int color = selected ? colors.accent : colors.secondary;
@@ -474,28 +506,33 @@ public final class Dashboard extends Activity {
             view.setMinimumHeight(dp(56));
             view.setBackground(interactive(0, 12, 0));
             addPressFeedback(view);
-            ImageView image = icon(icons[i], color);
+            ImageView image = icon(TAB_ICONS[i], color);
             image.setPadding(dp(11), dp(4), dp(11), dp(4));
             if (selected) image.setBackground(shape(colors.iconBackground, 16, 0));
             view.addView(image, new LinearLayout.LayoutParams(dp(44), dp(30)));
-            TextView caption = label(names[i], 11, color, selected);
+            TextView caption = label(TAB_NAMES[i], 11, color, selected);
             caption.setGravity(Gravity.CENTER);
             caption.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
             view.addView(caption, new LinearLayout.LayoutParams(-1, -2));
-            view.setContentDescription(names[i]);
+            view.setContentDescription(TAB_NAMES[i]);
             view.setSelected(selected);
             view.setFocusable(true);
-            view.setOnClickListener(clicked -> {
-                int direction = tab == ALERT_TAB ? -1 : Integer.compare(target, tab);
-                if (tab != target || app != null) selectedBar = -1;
-                tab = target;
-                historyId = 0;
-                app = null;
-                render(direction);
-            });
+            view.setOnClickListener(clicked -> selectTab(target));
             nav.addView(view, new LinearLayout.LayoutParams(0, -2, i == 1 ? 1.25f : 1f));
         }
         main.addView(nav);
+    }
+
+    private void selectTab(int target) {
+        if (target < 0 || target >= TAB_NAMES.length) return;
+        if (target == tab && app == null && historyId == 0) return;
+        int direction = Integer.compare(target, tab);
+        selectedBar = -1;
+        tab = target;
+        historyId = 0;
+        sessionMetric = SessionMeter.TOTAL;
+        app = null;
+        render(direction);
     }
 
     private void openDrawer() {
@@ -530,25 +567,80 @@ public final class Dashboard extends Activity {
         TextView close = action("×", this::closeDrawer, true, "Ayarlar panelini kapat");
         heading.addView(close);
         settings.addView(heading);
-        settings.addView(drawerAction("Veri Sayacı ›", () -> closeDrawer(() -> {
-            int direction = Integer.compare(SESSION_TAB, tab);
-            tab = SESSION_TAB;
-            historyId = 0;
-            app = null;
-            selectedBar = -1;
-            render(direction);
-        })));
+        for (SettingsPage page : SettingsPage.values()) {
+            if (page == SettingsPage.NONE) continue;
+            settings.addView(settingsLink(page.title, null, page.icon, () -> closeDrawer(() -> showSettingsPage(page))));
+        }
 
-        drawerHeading(settings, "Bildirim Ayarları");
-        boolean notifications = getSystemService(NotificationManager.class).areNotificationsEnabled();
-        settings.addView(drawerAction("Tüm bildirimler · " + (notifications ? "Açık" : "Kapalı"), this::enableNotifications));
-        addNotificationChannel(settings, "Günlük kullanım özeti", Monitor.SUMMARY_CHANNEL);
-        addNotificationChannel(settings, "Veri sınırı bildirimi", Monitor.ALERT_CHANNEL);
-        addNotificationChannel(settings, "Aylık paket uyarısı", Monitor.PLAN_CHANNEL);
-        settings.addView(drawerAction("Sınır: " + AlertRule.load(this).limit() + " ›", this::editAlertRule));
-        settings.addView(drawerAction("Aylık paket takibi ›", this::editPlan));
+        main.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
+        main.setDescendantFocusability(LinearLayout.FOCUS_BLOCK_DESCENDANTS);
+        root.addView(drawer, new FrameLayout.LayoutParams(-1, -1));
+        close.requestFocus();
+        if (animate && ValueAnimator.areAnimatorsEnabled()) {
+            scrim.setAlpha(0);
+            panel.setTranslationX(-dimensions.width);
+            scrim.animate().alpha(1).setDuration(210).setInterpolator(easeOut).start();
+            panel.animate().translationX(0).setDuration(250).setInterpolator(easeOut).start();
+        }
+    }
 
-        drawerHeading(settings, "Görünüş Ayarları");
+    private void showSettingsPage(SettingsPage page) {
+        settingsPage = page;
+        render();
+    }
+
+    private void renderSettingsPage() {
+        LinearLayout header = row();
+        header.setPadding(dp(12), dp(4), dp(16), dp(4));
+        header.addView(iconButton(R.drawable.ic_previous, "Geri", () -> showSettingsPage(SettingsPage.NONE)), touchTarget());
+        TextView title = label(settingsPage.title, 21, colors.text, true);
+        title.setAccessibilityHeading(true);
+        header.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+        main.addView(header);
+
+        ScrollView scroll = new UsageScrollView(this, colors.accent);
+        scroll.setFillViewport(true);
+        content = column();
+        content.setPadding(dp(16), dp(2), dp(16), dp(20));
+        scroll.addView(content);
+        main.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        switch (settingsPage) {
+            case NOTIFICATIONS:
+                addNotificationPreferences();
+                break;
+            case APPEARANCE:
+                addAppearancePreferences();
+                break;
+            case PLAN:
+                if (Usage.allowed(this)) {
+                    addPlanCard(revision, ZonedDateTime.now());
+                } else {
+                    LinearLayout plan = card();
+                    paragraph(plan, "Paket tüketimini görmek için kullanım erişimi gerekir.");
+                    plan.addView(settingsLink("Kullanım erişimini aç", null, 0, this::openUsageSettings));
+                    plan.addView(settingsLink("Paketi düzenle", null, 0, this::editPlan));
+                }
+                break;
+            default:
+                break;
+        }
+    }
+
+    private void addNotificationPreferences() {
+        LinearLayout channels = card();
+        boolean enabled = getSystemService(NotificationManager.class).areNotificationsEnabled();
+        channels.addView(settingsLink("Tüm bildirimler", enabled ? "Açık" : "Kapalı", 0, this::enableNotifications));
+        addNotificationChannel(channels, "Günlük kullanım özeti", Monitor.SUMMARY_CHANNEL);
+        addNotificationChannel(channels, "Veri sınırı bildirimi", Monitor.ALERT_CHANNEL);
+        addNotificationChannel(channels, "Aylık paket uyarısı", Monitor.PLAN_CHANNEL);
+        card().addView(settingsLink("Mobil veri sınırı", AlertRule.load(this).limit(), 0, this::editAlertRule));
+    }
+
+    private void addAppearancePreferences() {
+        LinearLayout theme = card();
+        TextView heading = label("Tema", 16, colors.text, true);
+        heading.setAccessibilityHeading(true);
+        theme.addView(heading);
         RadioGroup modes = new RadioGroup(this);
         int mode = Appearance.mode(this);
         int checked = View.NO_ID;
@@ -573,18 +665,7 @@ public final class Dashboard extends Activity {
                 recreate();
             }
         });
-        settings.addView(modes);
-
-        main.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
-        main.setDescendantFocusability(LinearLayout.FOCUS_BLOCK_DESCENDANTS);
-        root.addView(drawer, new FrameLayout.LayoutParams(-1, -1));
-        close.requestFocus();
-        if (animate && ValueAnimator.areAnimatorsEnabled()) {
-            scrim.setAlpha(0);
-            panel.setTranslationX(-dimensions.width);
-            scrim.animate().alpha(1).setDuration(210).setInterpolator(easeOut).start();
-            panel.animate().translationX(0).setDuration(250).setInterpolator(easeOut).start();
-        }
+        theme.addView(modes);
     }
 
     private void editAlertRule() {
@@ -668,16 +749,26 @@ public final class Dashboard extends Activity {
                 .setInterpolator(easeIn).withEndAction(finish).start();
     }
 
-    private void drawerHeading(LinearLayout parent, String text) {
-        TextView title = label(text, 15, colors.secondary, true);
-        title.setPadding(0, dp(21), 0, dp(8));
-        title.setAccessibilityHeading(true);
-        parent.addView(title);
-    }
-
-    private TextView drawerAction(String text, Runnable callback) {
-        TextView link = action(text, callback);
-        link.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+    private View settingsLink(String title, String detail, int iconRes, Runnable callback) {
+        LinearLayout link = row();
+        link.setMinimumHeight(dp(54));
+        link.setPadding(dp(10), dp(8), dp(8), dp(8));
+        link.setBackground(interactive(0, 12, 0));
+        if (iconRes != 0) {
+            LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(dp(22), dp(22));
+            size.setMarginEnd(dp(13));
+            link.addView(icon(iconRes, colors.accent), size);
+        }
+        LinearLayout text = column();
+        text.addView(label(title, 15, colors.text, true));
+        if (detail != null) text.addView(label(detail, 13, colors.secondary, false));
+        text.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
+        link.addView(text, new LinearLayout.LayoutParams(0, -2, 1));
+        link.addView(icon(R.drawable.ic_next, colors.secondary), new LinearLayout.LayoutParams(dp(20), dp(20)));
+        link.setContentDescription(detail == null ? title : title + ", " + detail);
+        link.setFocusable(true);
+        link.setOnClickListener(view -> callback.run());
+        addPressFeedback(link);
         return link;
     }
 
@@ -686,7 +777,7 @@ public final class Dashboard extends Activity {
         NotificationChannel channel = manager.getNotificationChannel(id);
         String status = manager.areNotificationsEnabled() && channel != null
                 && channel.getImportance() != NotificationManager.IMPORTANCE_NONE ? "Açık" : "Kapalı";
-        parent.addView(drawerAction(title + " · " + status, () -> openNotificationSettings(id)));
+        parent.addView(settingsLink(title, status, 0, () -> openNotificationSettings(id)));
     }
 
     private void openNotificationSettings(String channel) {
@@ -815,6 +906,7 @@ public final class Dashboard extends Activity {
         }
         horizontal.addView(switches);
         parent.addView(horizontal);
+        if (swipeLayout != null) swipeLayout.keepHorizontalGesturesOn(horizontal);
         View chosen = switches.getChildAt(current);
         horizontal.post(() -> {
             if (chosen.getRight() > horizontal.getWidth()) {
@@ -1008,13 +1100,17 @@ public final class Dashboard extends Activity {
                 request = queries.submit(() -> {
                     try (SessionMeter meter = new SessionMeter(Dashboard.this)) {
                         SessionMeter.State latest = meter.read(wanted);
-                        List<Usage.App> ranked = Usage.ranked(Dashboard.this, latest.appAmounts());
+                        List<Usage.App> ranked = Usage.rankedUserApps(Dashboard.this, latest.appAmounts());
                         runOnUiThread(() -> {
                             if (token != revision || isDestroyed()) return;
                             loading = false;
                             seenRevision = current;
                             state = latest;
                             apps = ranked;
+                            if (sessionMetric != SessionMeter.TOTAL && sessionMetric != Usage.HOTSPOT
+                                    && apps.stream().noneMatch(item -> item.uid == sessionMetric)) {
+                                sessionMetric = SessionMeter.TOTAL;
+                            }
                             unavailable = false;
                             updateControls();
                             showResults();
