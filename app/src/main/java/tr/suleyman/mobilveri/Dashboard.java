@@ -75,6 +75,8 @@ public final class Dashboard extends Activity {
     private String awaitedPage;
     private String pendingTabPage;
     private int pendingTab = -1;
+    private String pendingSelectionKey;
+    private Runnable pendingSelection;
     private SessionSnapshot latestSession;
     private boolean preloadingSession;
     private final PathInterpolator easeOut = new PathInterpolator(0.2f, 0f, 0f, 1f);
@@ -86,9 +88,12 @@ public final class Dashboard extends Activity {
     private View settingsButton;
     private boolean drawerOpen;
     private LinearLayout main;
+    private FrameLayout pageFrame;
     private LinearLayout content;
     private TabSwipeLayout swipeLayout;
     private SettingsPage settingsPage = SettingsPage.NONE;
+    private DataPlan.Snapshot readySettingsPlan;
+    private boolean settingsPlanPrepared;
     private int tab;
     private int mode;
     private int range = 2;
@@ -100,6 +105,9 @@ public final class Dashboard extends Activity {
     private int sessionMetric = SessionMeter.TOTAL;
     private long historyId;
     private boolean historyOpen;
+    private List<SessionMeter.Entry> historyEntries;
+    private SessionSnapshot historySnapshot;
+    private int historyNavigation;
     private long alertEnd;
     private long alertDuration;
 
@@ -223,12 +231,9 @@ public final class Dashboard extends Activity {
         } else if (tab == SESSION_TAB && historyId > 0) {
             openSessionHistory();
         } else if (tab == SESSION_TAB && historyOpen) {
-            historyOpen = false;
-            render();
+            closeSessionHistory();
         } else if (app != null) {
-            app = null;
-            selectedBar = -1;
-            render();
+            changeUsageSelection(null, mode, range, daysBack, -1);
         } else if (tab != 0) {
             selectTab(0);
         } else {
@@ -237,15 +242,17 @@ public final class Dashboard extends Activity {
     }
 
     private void render() {
-        render(0);
+        render(0, false);
     }
 
-    private void render(int tabDirection) {
+    private void render(int direction, boolean fullWidth) {
+        FrameLayout previousPage = pageFrame;
         if (request != null) request.cancel(true);
         int token = ++revision;
         awaitedPage = null;
         pendingTabPage = null;
         pendingTab = -1;
+        clearPendingSelection();
         tabPreviews.clear();
         root = new FrameLayout(this);
         drawer = null;
@@ -256,6 +263,7 @@ public final class Dashboard extends Activity {
         setContentView(root);
         if (settingsPage != SettingsPage.NONE) {
             renderSettingsPage();
+            PageMotion.animate(previousPage, pageFrame, direction, fullWidth, dp(28), easeOut);
             return;
         }
 
@@ -289,20 +297,18 @@ public final class Dashboard extends Activity {
         content = column();
         content.setPadding(dp(16), dp(2), dp(16), dp(20));
         scroll.addView(content);
+        scroll.setBackgroundColor(colors.background);
         boolean usageAllowed = Usage.allowed(this);
         if (usageAllowed && tab != ALERT_TAB && !historyOpen && historyId == 0) {
             swipeLayout = new TabSwipeLayout(this, offset -> previewTab(tab + offset),
                     offset -> selectTab(tab + offset, false));
             swipeLayout.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
-            main.addView(swipeLayout, new LinearLayout.LayoutParams(-1, 0, 1));
+            swipeLayout.setBackgroundColor(colors.background);
+            mountPage(swipeLayout);
         } else {
-            main.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+            mountPage(scroll);
         }
-        if (tabDirection != 0 && ValueAnimator.areAnimatorsEnabled()) {
-            scroll.setAlpha(0.65f);
-            scroll.setTranslationX(dp(12) * tabDirection);
-            scroll.animate().alpha(1f).translationX(0).setDuration(210).setInterpolator(easeOut).start();
-        }
+        PageMotion.animate(previousPage, pageFrame, direction, fullWidth, dp(28), easeOut);
         if (drawerOpen) openDrawer();
         if (!usageAllowed) {
             LinearLayout permission = card();
@@ -330,6 +336,12 @@ public final class Dashboard extends Activity {
         prepareTabPreviews();
     }
 
+    private void mountPage(View page) {
+        pageFrame = new FrameLayout(this);
+        pageFrame.addView(page, new FrameLayout.LayoutParams(-1, -1));
+        main.addView(pageFrame, new LinearLayout.LayoutParams(-1, 0, 1));
+    }
+
     private void drawUsageTab(int target, Usage.App selectedApp, ZonedDateTime snapshot, boolean foreground) {
         String key = usageKey(target, selectedApp, snapshot);
         UsagePage page = usagePages.get(key);
@@ -348,14 +360,15 @@ public final class Dashboard extends Activity {
         LocalDate today = snapshot.toLocalDate();
         ZoneId zone = snapshot.getZone();
         if (target == 1) {
-            if (app != null) content.addView(action("‹ Uygulamalara dön", () -> {
-                app = null;
-                selectedBar = -1;
-                render();
-            }));
-            TextView heading = label(app == null ? "Uygulama kullanımı" : app.name, 22, colors.text, true);
+            LinearLayout titleRow = row();
+            if (selectedApp != null) {
+                titleRow.addView(iconButton(R.drawable.ic_back, "Uygulamalara dön",
+                        () -> changeUsageSelection(null, mode, range, daysBack, -1)), touchTarget());
+            }
+            TextView heading = label(selectedApp == null ? "Uygulama kullanımı" : selectedApp.name, 22, colors.text, true);
             heading.setPadding(dp(4), dp(8), dp(4), dp(8));
-            content.addView(heading);
+            titleRow.addView(heading, new LinearLayout.LayoutParams(0, -2, 1));
+            content.addView(titleRow);
         }
         LinearLayout chartPanel = target == 1 && selectedApp == null ? null : card();
         LinearLayout chartSummary = chartPanel == null ? null : column();
@@ -364,15 +377,11 @@ public final class Dashboard extends Activity {
         }
         if (target == 1) {
             addSelector(chartPanel == null ? content : chartPanel, RANGES, range, value -> {
-                if (range != value) selectedBar = -1;
-                range = value;
-                render();
+                if (range != value) changeUsageSelection(app, mode, value, daysBack, Integer.compare(value, range));
             });
         } else {
             addSelector(chartPanel, MODES, mode, value -> {
-                if (mode != value) selectedBar = -1;
-                mode = value;
-                render();
+                if (mode != value) changeUsageSelection(null, value, range, daysBack, Integer.compare(value, mode));
             });
             if (mode == 0) addDatePicker(chartPanel, today, zone);
         }
@@ -449,13 +458,47 @@ public final class Dashboard extends Activity {
         usagePages.clear();
         loadingPages.clear();
         latestSession = null;
+        settingsPlanPrepared = false;
+        readySettingsPlan = null;
         render();
     }
 
     private String usageKey(int target, Usage.App selectedApp, ZonedDateTime snapshot) {
-        String period = target == 1 ? range + ":" + (selectedApp == null ? "all" : selectedApp.uid)
-                : mode + ":" + daysBack;
+        return usageKey(target, selectedApp, snapshot, mode, range, daysBack);
+    }
+
+    private String usageKey(int target, Usage.App selectedApp, ZonedDateTime snapshot,
+                            int selectedMode, int selectedRange, int selectedDay) {
+        String period = target == 1 ? selectedRange + ":" + (selectedApp == null ? "all" : selectedApp.uid)
+                : selectedMode + ":" + selectedDay;
         return target + ":" + period + ":" + snapshot.toLocalDate() + ":" + snapshot.getZone();
+    }
+
+    private void clearPendingSelection() {
+        pendingSelection = null;
+        pendingSelectionKey = null;
+    }
+
+    private void changeUsageSelection(Usage.App selectedApp, int newMode, int newRange, int newDay, int direction) {
+        pendingTab = -1;
+        pendingTabPage = null;
+        ZonedDateTime now = ZonedDateTime.now();
+        String key = usageKey(tab, selectedApp, now, newMode, newRange, newDay);
+        Runnable show = () -> {
+            app = selectedApp;
+            mode = newMode;
+            range = newRange;
+            daysBack = newDay;
+            selectedBar = -1;
+            render(direction, false);
+        };
+        if (usagePages.containsKey(key)) {
+            show.run();
+            return;
+        }
+        pendingSelectionKey = key;
+        pendingSelection = show;
+        loadUsagePage(tab, selectedApp, now, newMode, newRange, newDay);
     }
 
     private void preloadAdjacent(ZonedDateTime snapshot) {
@@ -467,14 +510,16 @@ public final class Dashboard extends Activity {
     }
 
     private void loadUsagePage(int selectedTab, Usage.App selectedApp, ZonedDateTime snapshot) {
-        String key = usageKey(selectedTab, selectedApp, snapshot);
+        loadUsagePage(selectedTab, selectedApp, snapshot, mode, range, daysBack);
+    }
+
+    private void loadUsagePage(int selectedTab, Usage.App selectedApp, ZonedDateTime snapshot,
+                               int selectedMode, int selectedRange, int selectedDay) {
+        String key = usageKey(selectedTab, selectedApp, snapshot, selectedMode, selectedRange, selectedDay);
         UsagePage cached = usagePages.get(key);
         if (cached != null && SystemClock.elapsedRealtime() - cached.loadedAt < 60_000) return;
         if (!loadingPages.add(key)) return;
         int generation = usageGeneration;
-        int selectedMode = mode;
-        int selectedRange = range;
-        int selectedDay = daysBack;
         usageQueries.execute(() -> {
             UsagePage page;
             try {
@@ -489,11 +534,12 @@ public final class Dashboard extends Activity {
                 loadingPages.remove(key);
                 usagePages.put(key, result);
                 if (usagePages.size() > 12) usagePages.remove(usagePages.keySet().iterator().next());
-                if (visible && key.equals(pendingTabPage)) selectTab(pendingTab, true);
-                else if (visible && pendingTab < 0 && key.equals(awaitedPage)) {
+                if (visible && key.equals(pendingSelectionKey)) pendingSelection.run();
+                else if (visible && key.equals(pendingTabPage)) selectTab(pendingTab, true);
+                else if (visible && pendingTab < 0 && pendingSelection == null && key.equals(awaitedPage)) {
                     int token = revision;
                     Runnable update = () -> {
-                        if (visible && token == revision && pendingTab < 0) render();
+                        if (visible && token == revision && pendingTab < 0 && pendingSelection == null) render();
                     };
                     if (swipeLayout == null) update.run();
                     else swipeLayout.whenGestureEnds(update);
@@ -572,7 +618,8 @@ public final class Dashboard extends Activity {
     private TextView planHeading(LinearLayout panel, DataPlan plan, String status) {
         LinearLayout heading = row();
         heading.addView(label("Mobil veri paketi", 17, colors.text, true), new LinearLayout.LayoutParams(0, -2, 1));
-        heading.addView(action(plan.capacity == 0 ? "Ayarla" : "Düzenle", this::editPlan));
+        heading.addView(iconButton(R.drawable.ic_edit, plan.capacity == 0 ? "Paketi ayarla" : "Paketi düzenle",
+                this::editPlan), touchTarget());
         panel.addView(heading);
         TextView details = label(plan.capacity == 0 ? "Paket boyutunu ve yenilenme gününü gir." : status,
                 14, colors.secondary, false);
@@ -706,6 +753,7 @@ public final class Dashboard extends Activity {
 
     private void selectTab(int target, boolean animate) {
         if (target < 0 || target >= TAB_NAMES.length) return;
+        clearPendingSelection();
         pendingTab = -1;
         pendingTabPage = null;
         if (target == tab && app == null && historyId == 0 && !historyOpen) return;
@@ -721,14 +769,15 @@ public final class Dashboard extends Activity {
             preloadLatestSession();
             return;
         }
-        int direction = Integer.compare(target, tab);
+        int direction = target == tab ? -1 : Integer.compare(target, tab);
+        boolean differentTab = target != tab;
         selectedBar = -1;
         tab = target;
         historyId = 0;
         historyOpen = false;
         sessionMetric = SessionMeter.TOTAL;
         app = null;
-        render(animate ? direction : 0);
+        render(animate ? direction : 0, differentTab);
     }
 
     private void openDrawer() {
@@ -760,8 +809,8 @@ public final class Dashboard extends Activity {
         TextView title = label("Ayarlar", 25, colors.text, true);
         title.setAccessibilityHeading(true);
         heading.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
-        TextView close = action("×", this::closeDrawer, true, "Ayarlar panelini kapat");
-        heading.addView(close);
+        ImageButton close = iconButton(R.drawable.ic_close, "Ayarlar panelini kapat", this::closeDrawer);
+        heading.addView(close, touchTarget());
         settings.addView(heading);
         for (SettingsPage page : SettingsPage.values()) {
             if (page == SettingsPage.NONE) continue;
@@ -781,14 +830,45 @@ public final class Dashboard extends Activity {
     }
 
     private void showSettingsPage(SettingsPage page) {
+        if (page == SettingsPage.PLAN && Usage.allowed(this)) {
+            DataPlan plan = DataPlan.load(this);
+            ZonedDateTime now = ZonedDateTime.now();
+            UsagePage overview = usagePages.get(usageKey(0, null, now));
+            if (plan.capacity > 0 && overview == null) {
+                int token = revision;
+                queries.execute(() -> {
+                    DataPlan.Snapshot value = null;
+                    try {
+                        value = plan.read(this, now);
+                    } catch (RuntimeException error) {
+                        android.util.Log.w("DataWarner", "Paket verisi okunamadı", error);
+                    }
+                    DataPlan.Snapshot prepared = value;
+                    runOnUiThread(() -> {
+                        if (token != revision || !visible || isDestroyed() || drawerOpen
+                                || pendingTab >= 0 || pendingSelection != null) return;
+                        readySettingsPlan = prepared;
+                        settingsPlanPrepared = true;
+                        navigateToSettings(page);
+                    });
+                });
+                return;
+            }
+            readySettingsPlan = overview == null ? null : overview.plan;
+            settingsPlanPrepared = true;
+        }
+        navigateToSettings(page);
+    }
+
+    private void navigateToSettings(SettingsPage page) {
         settingsPage = page;
-        render();
+        render(page == SettingsPage.NONE ? -1 : 1, false);
     }
 
     private void renderSettingsPage() {
         LinearLayout header = row();
         header.setPadding(dp(12), dp(4), dp(16), dp(4));
-        header.addView(iconButton(R.drawable.ic_previous, "Geri", () -> showSettingsPage(SettingsPage.NONE)), touchTarget());
+        header.addView(iconButton(R.drawable.ic_back, "Geri", () -> showSettingsPage(SettingsPage.NONE)), touchTarget());
         TextView title = label(settingsPage.title, 21, colors.text, true);
         title.setAccessibilityHeading(true);
         header.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
@@ -799,7 +879,8 @@ public final class Dashboard extends Activity {
         content = column();
         content.setPadding(dp(16), dp(2), dp(16), dp(20));
         scroll.addView(content);
-        main.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        scroll.setBackgroundColor(colors.background);
+        mountPage(scroll);
         switch (settingsPage) {
             case NOTIFICATIONS:
                 addNotificationPreferences();
@@ -809,7 +890,8 @@ public final class Dashboard extends Activity {
                 break;
             case PLAN:
                 if (Usage.allowed(this)) {
-                    addPlanCard(revision, ZonedDateTime.now());
+                    if (settingsPlanPrepared) addPreparedPlanCard(readySettingsPlan);
+                    else addPlanCard(revision, ZonedDateTime.now());
                 } else {
                     LinearLayout plan = card();
                     paragraph(plan, "Paket tüketimini görmek için kullanım erişimi gerekir.");
@@ -1040,11 +1122,8 @@ public final class Dashboard extends Activity {
 
     private void addDatePicker(LinearLayout panel, LocalDate today, ZoneId zone) {
         LinearLayout dateRow = row();
-        ImageButton previous = iconButton(R.drawable.ic_previous, "Önceki gün", () -> {
-            daysBack++;
-            selectedBar = -1;
-            render();
-        });
+        ImageButton previous = iconButton(R.drawable.ic_previous, "Önceki gün",
+                () -> changeUsageSelection(null, mode, range, daysBack + 1, -1));
         previous.setEnabled(daysBack < 29);
         dateRow.addView(previous, touchTarget());
         LocalDate selected = today.minusDays(daysBack);
@@ -1052,9 +1131,8 @@ public final class Dashboard extends Activity {
         TextView day = action(dateLabel, () -> {
             DatePickerDialog dialog = new DatePickerDialog(this, (view, year, month, dayOfMonth) -> {
                 LocalDate date = LocalDate.of(year, month + 1, dayOfMonth);
-                daysBack = Math.toIntExact(today.toEpochDay() - date.toEpochDay());
-                selectedBar = -1;
-                render();
+                int chosen = Math.toIntExact(today.toEpochDay() - date.toEpochDay());
+                if (chosen != daysBack) changeUsageSelection(null, mode, range, chosen, Integer.compare(daysBack, chosen));
             }, selected.getYear(), selected.getMonthValue() - 1, selected.getDayOfMonth());
             dialog.getDatePicker().setMaxDate(Usage.startOf(today.plusDays(1), zone) - 1);
             dialog.getDatePicker().setMinDate(Usage.startOf(today.minusDays(29), zone));
@@ -1065,11 +1143,8 @@ public final class Dashboard extends Activity {
         day.setCompoundDrawablesRelativeWithIntrinsicBounds(calendar, null, null, null);
         day.setCompoundDrawablePadding(dp(6));
         dateRow.addView(day, new LinearLayout.LayoutParams(0, -2, 1));
-        ImageButton next = iconButton(R.drawable.ic_next, "Sonraki gün", () -> {
-            daysBack--;
-            selectedBar = -1;
-            render();
-        });
+        ImageButton next = iconButton(R.drawable.ic_next, "Sonraki gün",
+                () -> changeUsageSelection(null, mode, range, daysBack - 1, 1));
         next.setEnabled(daysBack > 0);
         dateRow.addView(next, touchTarget());
         panel.addView(dateRow);
@@ -1131,8 +1206,8 @@ public final class Dashboard extends Activity {
                 : selectedTab == 0 ? "Hotspot dahil" : "Grafikten bir aralık seç";
         TextView hint = label(chartHint, 12, colors.secondary, false);
         controls.addView(hint, new LinearLayout.LayoutParams(0, -2, 1));
-        TextView reset = action("Toplama dön", () -> chart.choose(-1));
-        controls.addView(reset);
+        ImageButton reset = iconButton(R.drawable.ic_reset, "Toplama dön", () -> chart.choose(-1));
+        controls.addView(reset, touchTarget());
         ImageButton previous = iconButton(R.drawable.ic_previous, "Önceki grafik aralığı", () -> chart.step(-1));
         ImageButton next = iconButton(R.drawable.ic_next, "Sonraki grafik aralığı", () -> chart.step(1));
         controls.addView(previous, touchTarget());
@@ -1165,9 +1240,7 @@ public final class Dashboard extends Activity {
         }
         list.addView(label("Sistem uygulamaları gizli", 12, colors.secondary, false));
         addAppRows(list, apps, apps.size(), result -> {
-            app = result;
-            selectedBar = -1;
-            render();
+            changeUsageSelection(result, mode, range, daysBack, 1);
         });
     }
 
@@ -1182,6 +1255,7 @@ public final class Dashboard extends Activity {
             if (choose != null) {
                 entry.setOnClickListener(view -> choose.accept(result));
                 entry.setFocusable(true);
+                addPressFeedback(entry);
             }
             LinearLayout top = row();
             LinearLayout.LayoutParams badgeLayout = new LinearLayout.LayoutParams(dp(34), dp(34));
@@ -1262,7 +1336,7 @@ public final class Dashboard extends Activity {
                     else {
                         pendingTab = -1;
                         tab = SESSION_TAB;
-                        render(1);
+                        render(1, true);
                     }
                 } else prepareTabPreviews();
             });
@@ -1270,57 +1344,107 @@ public final class Dashboard extends Activity {
     }
 
     private void openSessionHistory() {
-        historyId = 0;
-        historyOpen = true;
-        sessionMetric = SessionMeter.TOTAL;
-        render();
+        int direction = historyId > 0 ? -1 : 1;
+        int token = revision;
+        int navigation = ++historyNavigation;
+        loadSessionHistory(entries -> {
+            if (token != revision || navigation != historyNavigation || !visible) return;
+            historyEntries = entries;
+            historyId = 0;
+            historyOpen = true;
+            sessionMetric = SessionMeter.TOTAL;
+            render(direction, false);
+        }, this::showHistoryReadError);
+    }
+
+    private void closeSessionHistory() {
+        historyOpen = false;
+        render(-1, false);
+    }
+
+    private void openHistoryEntry(long id) {
+        int token = revision;
+        int navigation = ++historyNavigation;
+        queries.execute(() -> {
+            try {
+                SessionSnapshot snapshot = readSession(id, 0);
+                runOnUiThread(() -> {
+                    if (token != revision || navigation != historyNavigation || !visible || isDestroyed()) return;
+                    if (snapshot.state.id == 0) {
+                        showHistoryReadError();
+                        return;
+                    }
+                    historySnapshot = snapshot;
+                    historyOpen = false;
+                    historyId = id;
+                    sessionMetric = SessionMeter.TOTAL;
+                    render(1, false);
+                });
+            } catch (RuntimeException error) {
+                runOnUiThread(() -> {
+                    if (token == revision && navigation == historyNavigation) showHistoryReadError();
+                });
+            }
+        });
     }
 
     private void renderSessionHistory(int token) {
         LinearLayout heading = row();
-        heading.addView(iconButton(R.drawable.ic_previous, "Sayaca dön", () -> {
-            historyOpen = false;
-            render();
-        }), touchTarget());
+        heading.addView(iconButton(R.drawable.ic_back, "Sayaca dön", this::closeSessionHistory), touchTarget());
         TextView title = label("Sayaç geçmişi", 21, colors.text, true);
         title.setAccessibilityHeading(true);
         heading.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
         content.addView(heading);
         LinearLayout list = card();
+        if (historyEntries != null) {
+            showHistoryEntries(heading, list, historyEntries);
+            return;
+        }
         paragraph(list, "Geçmiş yükleniyor…");
-        request = queries.submit(() -> {
+        loadSessionHistory(entries -> {
+            if (token != revision || isDestroyed()) return;
+            historyEntries = entries;
+            showHistoryEntries(heading, list, entries);
+        }, () -> {
+            if (token != revision || isDestroyed()) return;
+            list.removeAllViews();
+            paragraph(list, "Sayaç geçmişi okunamadı.");
+        });
+    }
+
+    private void loadSessionHistory(Consumer<List<SessionMeter.Entry>> ready, Runnable failed) {
+        queries.execute(() -> {
             try (SessionMeter meter = new SessionMeter(this)) {
                 List<SessionMeter.Entry> entries = meter.history();
-                runOnUiThread(() -> {
-                    if (token != revision || isDestroyed()) return;
-                    list.removeAllViews();
-                    if (entries.isEmpty()) {
-                        paragraph(list, "Henüz kayıtlı ölçüm yok.");
-                        return;
-                    }
-                    list.addView(settingsLink("Tümünü sil", entries.size() + " kayıt", 0, () -> confirmDeleteHistory(0)));
-                    ZoneId zone = ZoneId.systemDefault();
-                    for (SessionMeter.Entry entry : entries) {
-                        String time = Instant.ofEpochMilli(entry.started).atZone(zone).format(SESSION_TIME);
-                        LinearLayout item = row();
-                        item.addView(settingsLink(entry.title.isEmpty() ? "Veri ölçümü" : entry.title, time, 0, () -> {
-                            historyOpen = false;
-                            historyId = entry.id;
-                            sessionMetric = SessionMeter.TOTAL;
-                            render();
-                        }), new LinearLayout.LayoutParams(0, -2, 1));
-                        item.addView(action("Sil", () -> confirmDeleteHistory(entry.id), true, time + " ölçümünü sil"));
-                        list.addView(item);
-                    }
-                });
+                runOnUiThread(() -> ready.accept(entries));
             } catch (RuntimeException error) {
-                runOnUiThread(() -> {
-                    if (token != revision || isDestroyed()) return;
-                    list.removeAllViews();
-                    paragraph(list, "Sayaç geçmişi okunamadı.");
-                });
+                runOnUiThread(failed);
             }
         });
+    }
+
+    private void showHistoryEntries(LinearLayout header, LinearLayout list, List<SessionMeter.Entry> entries) {
+        list.removeAllViews();
+        if (entries.isEmpty()) {
+            paragraph(list, "Henüz kayıtlı ölçüm yok.");
+            return;
+        }
+        header.addView(iconButton(R.drawable.ic_trash, "Tüm geçmişi sil", () -> confirmDeleteHistory(0)), touchTarget());
+        ZoneId zone = ZoneId.systemDefault();
+        for (SessionMeter.Entry entry : entries) {
+            String time = Instant.ofEpochMilli(entry.started).atZone(zone).format(SESSION_TIME);
+            LinearLayout item = row();
+            item.addView(settingsLink(entry.title.isEmpty() ? "Veri ölçümü" : entry.title, time, 0,
+                    () -> openHistoryEntry(entry.id)), new LinearLayout.LayoutParams(0, -2, 1));
+            item.addView(iconButton(R.drawable.ic_trash, time + " ölçümünü sil",
+                    () -> confirmDeleteHistory(entry.id)), touchTarget());
+            list.addView(item);
+        }
+    }
+
+    private void showHistoryReadError() {
+        if (!isDestroyed() && visible) android.widget.Toast.makeText(this,
+                "Sayaç geçmişi okunamadı.", android.widget.Toast.LENGTH_SHORT).show();
     }
 
     private void confirmDeleteHistory(long id) {
@@ -1338,7 +1462,19 @@ public final class Dashboard extends Activity {
                 runOnUiThread(() -> {
                     if (isDestroyed()) return;
                     latestSession = null;
-                    if (visible && tab == SESSION_TAB && settingsPage == SettingsPage.NONE) render();
+                    historyEntries = null;
+                    historySnapshot = null;
+                    if (!visible || tab != SESSION_TAB || settingsPage != SettingsPage.NONE) return;
+                    if (!historyOpen) {
+                        render();
+                        return;
+                    }
+                    int token = revision;
+                    loadSessionHistory(entries -> {
+                        if (token != revision || isDestroyed()) return;
+                        historyEntries = entries;
+                        render();
+                    }, this::showHistoryReadError);
                 });
             } catch (RuntimeException failure) {
                 runOnUiThread(() -> {
@@ -1357,7 +1493,7 @@ public final class Dashboard extends Activity {
         private TextView pace;
         private TextView status;
         private TextView toggle;
-        private TextView reset;
+        private ImageButton reset;
         private SessionMeter.State state;
         private List<Usage.App> apps = new ArrayList<>();
         private int seenRevision = Integer.MIN_VALUE;
@@ -1373,10 +1509,11 @@ public final class Dashboard extends Activity {
         }
 
         void show(boolean foreground) {
-            if (historyId == 0 && latestSession != null) {
-                state = latestSession.state;
-                apps = latestSession.apps;
-                seenRevision = latestSession.revision;
+            SessionSnapshot prepared = historyId == 0 ? latestSession : historySnapshot;
+            if (prepared != null && (historyId == 0 || prepared.state.id == historyId)) {
+                state = prepared.state;
+                apps = prepared.apps;
+                seenRevision = prepared.revision;
             }
             LinearLayout banner = card();
             banner.addView(label("Veri sayacı", 18, colors.text, true));
@@ -1401,17 +1538,14 @@ public final class Dashboard extends Activity {
             });
             toggle.setMinHeight(dp(48));
             actions.addView(toggle, new LinearLayout.LayoutParams(0, -2, 1));
-            if (historyId > 0) {
-                toggle.setVisibility(View.GONE);
-                actions.addView(action("Geçmişe dön", Dashboard.this::openSessionHistory),
-                        new LinearLayout.LayoutParams(0, -2, 1));
-            } else {
-                actions.addView(action("Geçmiş", Dashboard.this::openSessionHistory, true, "Oturum geçmişi"));
-            }
-            banner.addView(actions);
-            reset = action("Sayacı sıfırla", this::resetCounter);
+            boolean historical = historyId > 0;
+            toggle.setVisibility(historical ? View.GONE : View.VISIBLE);
+            actions.addView(iconButton(historical ? R.drawable.ic_back : R.drawable.ic_history,
+                    historical ? "Geçmişe dön" : "Oturum geçmişi", Dashboard.this::openSessionHistory), touchTarget());
+            reset = iconButton(R.drawable.ic_reset, "Sayacı sıfırla", this::resetCounter);
             reset.setVisibility(View.GONE);
-            if (historyId == 0) banner.addView(reset);
+            if (!historical) actions.addView(reset, touchTarget());
+            banner.addView(actions);
             results = column();
             content.addView(results);
             if (state != null) {
@@ -1423,7 +1557,7 @@ public final class Dashboard extends Activity {
 
         private void tick() {
             if (token != revision || !visible || isFinishing()) return;
-            int current = SessionService.revision();
+            int current = historyId > 0 ? 0 : SessionService.revision();
             if (!loading && current != seenRevision) {
                 loading = true;
                 long wanted = historyId;
@@ -1437,6 +1571,7 @@ public final class Dashboard extends Activity {
                             state = latest.state;
                             apps = latest.apps;
                             if (wanted == 0) latestSession = latest;
+                            else historySnapshot = latest;
                             if (sessionMetric != SessionMeter.TOTAL && sessionMetric != Usage.HOTSPOT
                                     && apps.stream().noneMatch(item -> item.uid == sessionMetric)) {
                                 sessionMetric = SessionMeter.TOTAL;
@@ -1499,13 +1634,17 @@ public final class Dashboard extends Activity {
             if (state.points.isEmpty()) return;
 
             LinearLayout totals = sessionCard();
-            totals.addView(label(state.title.isEmpty() ? "Oturum ayrıntıları" : state.title, 17, colors.text, true));
+            LinearLayout heading = row();
+            heading.addView(label(state.title.isEmpty() ? "Oturum ayrıntıları" : state.title, 17, colors.text, true),
+                    new LinearLayout.LayoutParams(0, -2, 1));
+            heading.addView(iconButton(R.drawable.ic_edit, "Oturumu adlandır",
+                    () -> nameSession(state.id, state.title)), touchTarget());
+            totals.addView(heading);
             totals.addView(label("Hotspot · " + Usage.format(state.amount(Usage.HOTSPOT)), 16, colors.hotspot, true));
             ZoneId zone = ZoneId.systemDefault();
             String start = Instant.ofEpochMilli(state.points.get(0).wall).atZone(zone).format(SESSION_TIME);
             String end = Instant.ofEpochMilli(state.last().wall).atZone(zone).format(SESSION_TIME);
             paragraph(totals, start + " – " + end);
-            totals.addView(action("Oturumu adlandır", () -> nameSession(state.id, state.title)));
 
             LinearLayout graph = sessionCard();
             LinearLayout switches = row();
@@ -1576,6 +1715,8 @@ public final class Dashboard extends Activity {
                                 meter.rename(id, title);
                                 runOnUiThread(() -> {
                                     latestSession = null;
+                                    historyEntries = null;
+                                    historySnapshot = null;
                                     if (token == revision) seenRevision = Integer.MIN_VALUE;
                                 });
                             } catch (RuntimeException error) {
@@ -1894,6 +2035,8 @@ public final class Dashboard extends Activity {
         button.setBackground(interactive(0, 12, 0));
         addPressFeedback(button);
         button.setContentDescription(description);
+        button.setTooltipText(description);
+        button.setFocusable(true);
         button.setOnClickListener(view -> callback.run());
         return button;
     }

@@ -1,0 +1,40 @@
+# Data Warner v1.5
+
+This release collects the changes since v1.4. The signed APK supports Android 11 and later and can update v1.4 through v1.4.4 without uninstalling the app.
+
+## v1.5
+
+- Tapping a main tab slides both pages. Opening a detail page or going back uses a shorter slide and fade.
+- App details, chart filters, and meter history prepare data before replacing the current page.
+- Back, close, edit, reset, history, and delete actions use icons with accessible names. Main tab and meter controls keep their text labels.
+
+## v1.4.4
+
+- Restored launchable preinstalled apps such as YouTube and Chrome to usage lists.
+- Made the adjacent tab follow the finger during a swipe. Main tab data is prepared in advance.
+- Added meter reset without deleting past measurements. Resetting during a measurement saves it to history.
+- Moved meter history to its own page, with individual and bulk deletion.
+
+## v1.4.3
+
+- Applied the app filter to the Apps tab, meter breakdown, and usage alert details.
+- Added left and right swipe navigation between the four main tabs.
+- Split the side menu into Notifications, Appearance, and Mobile Data Plan screens. The meter remains in the bottom navigation.
+
+## v1.4.2
+
+- Hid system apps from the Apps tab and limited long names to two lines in the list. Full names remain visible in app details.
+- Smoothed tab changes, side menu motion, and button feedback. Added a subtle stretch at scroll boundaries.
+
+## v1.4.1
+
+- Combined usage totals, charts, and date controls on the Overview and Hotspot screens.
+- Added bottom navigation icons and simplified light and dark themes.
+- Added each app's share of recorded app traffic to usage lists.
+- Put elapsed time, total usage, and estimated hourly usage together in the meter.
+
+## v1.4
+
+- Added data plan tracking with remaining allowance, renewal date, a daily budget, and alerts at 80% and 95%.
+- Added named meter sessions, session history, and an hourly usage estimate.
+- Added a usage breakdown when opening a data alert and a home-screen widget for today's use and the remaining plan allowance.
