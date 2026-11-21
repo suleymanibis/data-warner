@@ -52,7 +52,31 @@ public final class MobilVeriChecks {
         checkAppearance();
         checkSessionData();
         checkCustomAlert();
+        checkDataPlan();
+        checkSessionRate();
         System.out.println("Schedule, chart periods, counter and formatting checks passed.");
+    }
+
+    private static void checkDataPlan() {
+        DataPlan plan = DataPlan.parse("12,5", "31");
+        check(plan.capacity == 12_500_000_000L, "decimal data plan size");
+        check(plan.start(LocalDate.of(2027, 2, 27)).equals(LocalDate.of(2027, 1, 31)),
+                "previous month before short-month cutoff");
+        check(plan.start(LocalDate.of(2027, 2, 28)).equals(LocalDate.of(2027, 2, 28)),
+                "cutoff clamps to last day of a short month");
+        check(plan.cutoff(java.time.YearMonth.of(2028, 2)).getDayOfMonth() == 29, "leap year cutoff");
+        LocalDate start = LocalDate.of(2026, 11, 1);
+        DataPlan.Snapshot usage = new DataPlan.Snapshot(start, start.plusMonths(1), 10, 1000, 800);
+        check(usage.level() == 80 && usage.remaining() == 200 && usage.perDay() == 20, "80 percent and daily budget");
+        check(new DataPlan.Snapshot(start, start.plusMonths(1), 1, 1000, 950).level() == 95, "95 percent boundary");
+        check(new DataPlan.Snapshot(start, start.plusMonths(1), 1, 1000, 1100).remaining() == 0, "exhausted plan");
+    }
+
+    private static void checkSessionRate() {
+        SessionMeter.State state = new SessionMeter.State(java.util.Arrays.asList(
+                new SessionMeter.Point(1000, 1000, 0, null),
+                new SessionMeter.Point(301000, 301000, 250_000_000L, null)), false);
+        check(state.hourlyEstimate() == 3_000_000_000L, "250 MB in five minutes projects to 3 GB/hour");
     }
 
     private static void checkCustomAlert() {

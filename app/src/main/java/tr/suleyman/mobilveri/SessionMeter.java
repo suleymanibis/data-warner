@@ -20,43 +20,58 @@ final class SessionMeter extends SQLiteOpenHelper {
     static final int TOTAL = Integer.MIN_VALUE;
 
     SessionMeter(Context context) {
-        super(context, "sessions.db", null, 1);
+        super(context, "sessions.db", null, 2);
     }
 
     @Override public void onCreate(SQLiteDatabase db) {
-        db.execSQL("CREATE TABLE session (id INTEGER PRIMARY KEY CHECK(id = 1), active INTEGER NOT NULL)");
-        db.execSQL("CREATE TABLE point (elapsed INTEGER PRIMARY KEY, wall INTEGER NOT NULL,"
-                + " mobile INTEGER NOT NULL, apps TEXT)");
+        db.execSQL("CREATE TABLE session (id INTEGER PRIMARY KEY AUTOINCREMENT, active INTEGER NOT NULL,"
+                + " title TEXT NOT NULL DEFAULT '', started INTEGER NOT NULL, completed INTEGER)");
+        db.execSQL("CREATE TABLE point (session_id INTEGER NOT NULL, elapsed INTEGER NOT NULL, wall INTEGER NOT NULL,"
+                + " mobile INTEGER NOT NULL, apps TEXT, PRIMARY KEY(session_id, elapsed))");
     }
 
     @Override public void onUpgrade(SQLiteDatabase db, int from, int to) {
-        throw new IllegalStateException("Sayaç kaydı sürümü tanınmadı");
+        if (from != 1 || to != 2) throw new IllegalStateException("Sayaç kaydı sürümü tanınmadı");
+        db.execSQL("ALTER TABLE session RENAME TO old_session");
+        db.execSQL("ALTER TABLE point RENAME TO old_point");
+        onCreate(db);
+        db.execSQL("INSERT INTO session(id, active, started, completed)"
+                + " SELECT 1, active, (SELECT wall FROM old_point ORDER BY elapsed LIMIT 1),"
+                + " CASE WHEN active = 0 THEN (SELECT wall FROM old_point ORDER BY elapsed DESC LIMIT 1) END"
+                + " FROM old_session WHERE EXISTS(SELECT 1 FROM old_point)");
+        db.execSQL("INSERT INTO point SELECT 1, elapsed, wall, mobile, apps FROM old_point");
+        db.execSQL("DROP TABLE old_point");
+        db.execSQL("DROP TABLE old_session");
     }
 
-    void begin(Point point) {
+    long begin(Point point) {
         SQLiteDatabase db = getWritableDatabase();
         db.beginTransaction();
         try {
-            db.delete("point", null, null);
-            insert(db, point);
-            db.execSQL("INSERT OR REPLACE INTO session(id, active) VALUES(1, 1)");
+            db.execSQL("UPDATE session SET active = 0 WHERE active = 1");
+            ContentValues row = new ContentValues();
+            row.put("active", 1);
+            row.put("started", point.wall);
+            long id = db.insertOrThrow("session", null, row);
+            insert(db, id, point);
             db.setTransactionSuccessful();
+            return id;
         } finally {
             db.endTransaction();
         }
     }
 
-    void record(Point point) {
-        insert(getWritableDatabase(), point);
+    void record(long id, Point point) {
+        insert(getWritableDatabase(), id, point);
     }
 
-    void end(Point point) {
+    void end(long id, Point point) {
         SQLiteDatabase db = getWritableDatabase();
         db.beginTransaction();
         try {
-            db.delete("point", "elapsed >= ?", new String[]{Long.toString(point.elapsed)});
-            insert(db, point);
-            db.execSQL("UPDATE session SET active = 0 WHERE id = 1");
+            db.delete("point", "session_id = ? AND elapsed >= ?", new String[]{Long.toString(id), Long.toString(point.elapsed)});
+            insert(db, id, point);
+            db.execSQL("UPDATE session SET active = 0, completed = ? WHERE id = ?", new Object[]{point.wall, id});
             db.setTransactionSuccessful();
         } finally {
             db.endTransaction();
@@ -64,15 +79,30 @@ final class SessionMeter extends SQLiteOpenHelper {
     }
 
     State read() {
+        return read(0);
+    }
+
+    State read(long wanted) {
         List<Point> points = new ArrayList<>();
-        boolean active;
+        boolean active = false;
+        boolean interrupted = false;
+        long id = 0;
+        String title = "";
         SQLiteDatabase db = getReadableDatabase();
         db.beginTransactionNonExclusive();
         try {
-            try (Cursor row = db.rawQuery("SELECT active FROM session WHERE id = 1", null)) {
-                active = row.moveToFirst() && row.getInt(0) != 0;
+            try (Cursor row = db.rawQuery("SELECT id, active, title, completed FROM session "
+                    + (wanted > 0 ? "WHERE id = ? " : "") + "ORDER BY id DESC LIMIT 1",
+                    wanted > 0 ? new String[]{Long.toString(wanted)} : null)) {
+                if (row.moveToFirst()) {
+                    id = row.getLong(0);
+                    active = row.getInt(1) != 0;
+                    title = row.getString(2);
+                    interrupted = !active && row.isNull(3);
+                }
             }
-            try (Cursor rows = db.rawQuery("SELECT elapsed, wall, mobile, apps FROM point ORDER BY elapsed", null)) {
+            try (Cursor rows = db.rawQuery("SELECT elapsed, wall, mobile, apps FROM point WHERE session_id = ? ORDER BY elapsed",
+                    new String[]{Long.toString(id)})) {
                 while (rows.moveToNext()) {
                     points.add(new Point(rows.getLong(0), rows.getLong(1), rows.getLong(2),
                             rows.isNull(3) ? null : decode(rows.getString(3))));
@@ -82,11 +112,26 @@ final class SessionMeter extends SQLiteOpenHelper {
         } finally {
             db.endTransaction();
         }
-        return new State(points, active);
+        return new State(points, active, id, title, interrupted);
     }
 
-    private static void insert(SQLiteDatabase db, Point point) {
+    List<Entry> history() {
+        List<Entry> entries = new ArrayList<>();
+        try (Cursor rows = getReadableDatabase().rawQuery("SELECT id, title, started FROM session ORDER BY id DESC", null)) {
+            while (rows.moveToNext()) entries.add(new Entry(rows.getLong(0), rows.getString(1), rows.getLong(2)));
+        }
+        return entries;
+    }
+
+    void rename(long id, String title) {
+        ContentValues value = new ContentValues();
+        value.put("title", title);
+        getWritableDatabase().update("session", value, "id = ?", new String[]{Long.toString(id)});
+    }
+
+    private static void insert(SQLiteDatabase db, long id, Point point) {
         ContentValues values = new ContentValues();
+        values.put("session_id", id);
         values.put("elapsed", point.elapsed);
         values.put("wall", point.wall);
         values.put("mobile", point.mobile);
@@ -153,10 +198,31 @@ final class SessionMeter extends SQLiteOpenHelper {
     static final class State {
         final List<Point> points;
         final boolean storedActive;
+        final long id;
+        final String title;
+        final boolean interrupted;
 
         State(List<Point> points, boolean storedActive) {
+            this(points, storedActive, 0, "", false);
+        }
+
+        State(List<Point> points, boolean storedActive, long id, String title, boolean interrupted) {
             this.points = points;
             this.storedActive = storedActive;
+            this.id = id;
+            this.title = title;
+            this.interrupted = interrupted;
+        }
+
+        long hourlyEstimate() {
+            List<Segment> segments = series(TOTAL);
+            long covered = 0;
+            long used = 0;
+            for (Segment part : segments) {
+                covered += part.end - part.start;
+                used += part.bytes;
+            }
+            return covered < 60_000L ? -1 : Math.round(used * (double) Usage.HOUR / covered);
         }
 
         long duration() {
@@ -222,6 +288,18 @@ final class SessionMeter extends SQLiteOpenHelper {
             }
             if (groupEnd > groupStart) result.add(new Segment(groupStart, groupEnd, bytes));
             return result;
+        }
+    }
+
+    static final class Entry {
+        final long id;
+        final String title;
+        final long started;
+
+        Entry(long id, String title, long started) {
+            this.id = id;
+            this.title = title;
+            this.started = started;
         }
     }
 

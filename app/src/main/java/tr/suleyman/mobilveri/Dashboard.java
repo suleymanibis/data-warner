@@ -52,6 +52,7 @@ import java.util.function.Consumer;
 
 public final class Dashboard extends Activity {
     private static final int SESSION_TAB = 3;
+    private static final int ALERT_TAB = 4;
     private static final String[] MODES = {"Saatlik", "Günlük", "Haftalık"};
     private static final String[] RANGES = {"1 sa", "3 sa", "1 gün", "3 gün", "1 hafta", "1 ay"};
     private static final long[] RANGE_HOURS = {1, 3, 24, 72, 168, 720};
@@ -79,6 +80,9 @@ public final class Dashboard extends Activity {
     private int revision;
     private boolean visible;
     private int sessionMetric = SessionMeter.TOTAL;
+    private long historyId;
+    private long alertEnd;
+    private long alertDuration;
 
     @Override protected void onCreate(Bundle saved) {
         colors = new Appearance(Appearance.useLight(Appearance.mode(this), getResources().getConfiguration().uiMode));
@@ -91,6 +95,9 @@ public final class Dashboard extends Activity {
             daysBack = saved.getInt("daysBack");
             selectedBar = saved.getInt("selectedBar", -1);
             sessionMetric = saved.getInt("sessionMetric", SessionMeter.TOTAL);
+            historyId = saved.getLong("historyId");
+            alertEnd = saved.getLong("alertEnd");
+            alertDuration = saved.getLong("alertDuration");
             drawerOpen = saved.getBoolean("drawerOpen");
             if (saved.containsKey("app_uid")) {
                 app = new Usage.App(saved.getInt("app_uid"), saved.getString("app_name"), 0);
@@ -109,8 +116,22 @@ public final class Dashboard extends Activity {
     private void selectSessionIntent(Intent intent) {
         if (intent != null && SessionService.OPEN_SESSION.equals(intent.getAction())) {
             tab = SESSION_TAB;
+            historyId = 0;
             drawerOpen = false;
             app = null;
+            intent.setAction(null);
+        }
+        if (intent != null && Monitor.OPEN_ALERT.equals(intent.getAction())) {
+            long end = intent.getLongExtra(Monitor.ALERT_END, 0);
+            long duration = intent.getLongExtra(Monitor.ALERT_DURATION, 0);
+            long now = System.currentTimeMillis();
+            if (end > now - 31L * 24 * Usage.HOUR && end <= now && duration >= 60_000 && duration <= 24 * Usage.HOUR) {
+                tab = ALERT_TAB;
+                alertEnd = end;
+                alertDuration = duration;
+                drawerOpen = false;
+                app = null;
+            }
             intent.setAction(null);
         }
     }
@@ -119,6 +140,7 @@ public final class Dashboard extends Activity {
         super.onResume();
         visible = true;
         Monitor.start(this);
+        PlanWidget.requestUpdate(this);
         render();
     }
 
@@ -135,6 +157,9 @@ public final class Dashboard extends Activity {
         state.putInt("daysBack", daysBack);
         state.putInt("selectedBar", selectedBar);
         state.putInt("sessionMetric", sessionMetric);
+        state.putLong("historyId", historyId);
+        state.putLong("alertEnd", alertEnd);
+        state.putLong("alertDuration", alertDuration);
         state.putBoolean("drawerOpen", drawerOpen);
         if (app != null) {
             state.putInt("app_uid", app.uid);
@@ -151,6 +176,10 @@ public final class Dashboard extends Activity {
     @Override public void onBackPressed() {
         if (drawerOpen) {
             closeDrawer();
+        } else if (tab == SESSION_TAB && historyId > 0) {
+            historyId = 0;
+            sessionMetric = SessionMeter.TOTAL;
+            render();
         } else if (app != null) {
             app = null;
             selectedBar = -1;
@@ -209,6 +238,10 @@ public final class Dashboard extends Activity {
             return;
         }
         addNavigation();
+        if (tab == ALERT_TAB) {
+            showAlert(token);
+            return;
+        }
         if (tab == SESSION_TAB) {
             new SessionPanel(token).show();
             return;
@@ -242,6 +275,7 @@ public final class Dashboard extends Activity {
             setHeroStyle(hero, tab);
             hero.addView(label(summaryTitle(tab, false, mode, daysBack, today), 14, colors.text, true));
             hero.addView(label("—", 42, tab == 2 ? colors.hotspot : colors.accent, true));
+            if (tab == 0) addPlanCard(token, snapshot);
             addSelector(MODES, mode, value -> {
                 if (mode != value) selectedBar = -1;
                 mode = value;
@@ -293,6 +327,117 @@ public final class Dashboard extends Activity {
         });
     }
 
+    private void addPlanCard(int token, ZonedDateTime now) {
+        LinearLayout panel = card();
+        LinearLayout heading = row();
+        heading.addView(label("Mobil veri paketi", 17, colors.text, true), new LinearLayout.LayoutParams(0, -2, 1));
+        heading.addView(action("Ayarla", this::editPlan));
+        panel.addView(heading);
+        DataPlan plan = DataPlan.load(this);
+        TextView details = label(plan.capacity == 0 ? "Paket boyutunu ve yenilenme gününü gir." : "Paket hesaplanıyor…",
+                14, colors.secondary, false);
+        panel.addView(details);
+        if (plan.capacity == 0) return;
+        queries.submit(() -> {
+            try {
+                DataPlan.Snapshot value = plan.read(this, now);
+                runOnUiThread(() -> {
+                    if (token != revision || isDestroyed()) return;
+                    details.setText("Kalan " + Usage.format(value.remaining()) + " / " + Usage.format(value.capacity));
+                    details.setTextColor(colors.accent);
+                    details.setTextSize(23);
+                    ProgressBar progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+                    progress.setProgressTintList(ColorStateList.valueOf(value.level() > 0 ? colors.warning : colors.accent));
+                    progress.setProgress(value.percent());
+                    panel.addView(progress);
+                    paragraph(panel, value.next.format(DATE) + " yenileme · " + value.days + " gün kaldı"
+                            + "\nGünlük bütçe " + Usage.format(value.perDay()) + " · Android ölçümü");
+                });
+            } catch (RuntimeException error) {
+                runOnUiThread(() -> {
+                    if (token == revision) details.setText("Paket verisi şu anda okunamadı.");
+                });
+            }
+        });
+    }
+
+    private void editPlan() {
+        DataPlan existing = DataPlan.load(this);
+        LinearLayout inputs = column();
+        inputs.setPadding(dp(24), dp(8), dp(24), 0);
+        EditText amount = alertInput(inputs, "Paket boyutu (GB)", existing.capacity == 0 ? "" : existing.gigabytes(), true);
+        EditText day = alertInput(inputs, "Yenilenme günü (1–31)", Integer.toString(existing.renewalDay), false);
+        TextView message = label("Kısa aylarda son gün kullanılır. Uyarı eşikleri %80 ve %95.", 13, colors.secondary, false);
+        inputs.addView(message);
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Paket takibi").setView(inputs)
+                .setNegativeButton("Vazgeç", null).setPositiveButton("Kaydet", null)
+                .setNeutralButton(existing.capacity > 0 ? "Kapat" : null, (d, w) -> savePlan(new DataPlan(0, 1))).create();
+        dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
+            try {
+                DataPlan plan = DataPlan.parse(amount.getText().toString(), day.getText().toString());
+                dialog.dismiss();
+                savePlan(plan);
+            } catch (IllegalArgumentException invalid) {
+                message.setText("0’dan büyük, en fazla 1000 GB ve 1–31 arasında bir gün gir.");
+                message.setTextColor(colors.warning);
+            }
+        }));
+        dialog.show();
+    }
+
+    private void savePlan(DataPlan plan) {
+        plan.save(this);
+        PlanWidget.requestUpdate(this);
+        render();
+    }
+
+    private void showAlert(int token) {
+        LinearLayout card = card();
+        card.addView(label("Veri sınırı özeti", 23, colors.text, true));
+        long end = alertEnd;
+        long start = end - alertDuration;
+        ZoneId zone = ZoneId.systemDefault();
+        paragraph(card, Instant.ofEpochMilli(start).atZone(zone).format(SESSION_TIME) + " – "
+                + Instant.ofEpochMilli(end).atZone(zone).format(SESSION_TIME));
+        TextView detail = label("Android kayıtları okunuyor…", 16, colors.text, true);
+        card.addView(detail);
+        request = queries.submit(() -> {
+            try {
+                List<Period> periods = new ArrayList<>();
+                long step = Math.max(60_000, (end - start + 11) / 12);
+                for (long time = start; time < end; time += step) {
+                    long until = Math.min(end, time + step);
+                    String from = Instant.ofEpochMilli(time).atZone(zone).format(CLOCK);
+                    String to = Instant.ofEpochMilli(until).atZone(zone).format(CLOCK);
+                    periods.add(new Period(time, until, from, from + "–" + to));
+                }
+                Long total = populatePeriods(periods, end, (a, b) -> Usage.total(this, a, b));
+                if (total == null || Thread.currentThread().isInterrupted()) return;
+                Map<Integer, Long> counts = Usage.apps(this, start, end);
+                counts.remove(Usage.HOTSPOT);
+                List<Usage.App> apps = Usage.ranked(this, counts);
+                runOnUiThread(() -> {
+                    if (token != revision || isDestroyed()) return;
+                    detail.setText("Android kaydı · " + Usage.format(total));
+                    BarChart chart = new BarChart(periods, colors.accent, -1);
+                    chart.selection = index -> {
+                        if (index >= 0) detail.setText(periodText(periods.get(index)));
+                    };
+                    card.addView(chart, new LinearLayout.LayoutParams(-1, dp(186)));
+                    paragraph(card, "Android kayıtları gecikebilir. Bu özet bildirimdeki canlı ölçümden farklı olabilir.");
+                    LinearLayout breakdown = card();
+                    breakdown.addView(label("En çok veri kullanan uygulamalar", 16, colors.text, true));
+                    if (apps.isEmpty()) paragraph(breakdown, "Bu aralık için henüz uygulama kaydı yok.");
+                    else addAppRows(breakdown, apps.subList(0, Math.min(5, apps.size())), null);
+                });
+            } catch (RuntimeException error) {
+                runOnUiThread(() -> {
+                    if (token == revision) detail.setText("Bu aralığın verileri okunamadı.");
+                });
+            }
+        });
+    }
+
     private void addNavigation() {
         LinearLayout nav = row();
         nav.setBackgroundColor(colors.surface);
@@ -303,6 +448,7 @@ public final class Dashboard extends Activity {
             TextView view = chip(names[i], tab == i, () -> {
                 if (tab != target || app != null) selectedBar = -1;
                 tab = target;
+                historyId = 0;
                 app = null;
                 render();
             });
@@ -349,6 +495,7 @@ public final class Dashboard extends Activity {
         settings.addView(drawerAction("Veri Sayacı ›", () -> {
             closeDrawer();
             tab = SESSION_TAB;
+            historyId = 0;
             app = null;
             selectedBar = -1;
             render();
@@ -359,7 +506,9 @@ public final class Dashboard extends Activity {
         settings.addView(drawerAction("Tüm bildirimler · " + (notifications ? "Açık" : "Kapalı"), this::enableNotifications));
         addNotificationChannel(settings, "Günlük kullanım özeti", Monitor.SUMMARY_CHANNEL);
         addNotificationChannel(settings, "Veri sınırı bildirimi", Monitor.ALERT_CHANNEL);
+        addNotificationChannel(settings, "Aylık paket uyarısı", Monitor.PLAN_CHANNEL);
         settings.addView(drawerAction("Sınır: " + AlertRule.load(this).limit() + " ›", this::editAlertRule));
+        settings.addView(drawerAction("Aylık paket takibi ›", this::editPlan));
 
         drawerHeading(settings, "Görünüş Ayarları");
         RadioGroup modes = new RadioGroup(this);
@@ -706,8 +855,10 @@ public final class Dashboard extends Activity {
             LinearLayout entry = column();
             entry.setPadding(dp(8), dp(11), dp(8), dp(11));
             entry.setBackground(interactive(colors.surface, 12, 0));
-            entry.setOnClickListener(view -> choose.accept(result));
-            entry.setFocusable(true);
+            if (choose != null) {
+                entry.setOnClickListener(view -> choose.accept(result));
+                entry.setFocusable(true);
+            }
             LinearLayout top = row();
             LinearLayout.LayoutParams badgeLayout = new LinearLayout.LayoutParams(dp(34), dp(34));
             badgeLayout.setMarginEnd(dp(10));
@@ -715,7 +866,7 @@ public final class Dashboard extends Activity {
             TextView name = label(result.name, 15, colors.text, true);
             name.setPadding(0, 0, dp(8), 0);
             top.addView(name, new LinearLayout.LayoutParams(0, -2, 1));
-            top.addView(label(Usage.format(result.bytes) + "  ›", 14, colors.accent, true));
+            top.addView(label(Usage.format(result.bytes) + (choose == null ? "" : "  ›"), 14, colors.accent, true));
             entry.addView(top);
             LinearLayout bar = row();
             bar.setBackground(shape(colors.border, 5, 0));
@@ -764,6 +915,15 @@ public final class Dashboard extends Activity {
                 updateControls();
             });
             banner.addView(toggle, new LinearLayout.LayoutParams(-1, dp(48)));
+            if (historyId > 0) {
+                toggle.setVisibility(View.GONE);
+                banner.addView(action("Son ölçüme dön", () -> {
+                    historyId = 0;
+                    sessionMetric = SessionMeter.TOTAL;
+                    render();
+                }));
+            }
+            banner.addView(action("Oturum geçmişi", this::openHistory));
             results = column();
             content.addView(results);
             tick();
@@ -774,9 +934,10 @@ public final class Dashboard extends Activity {
             int current = SessionService.revision();
             if (!loading && current != seenRevision) {
                 loading = true;
+                long wanted = historyId;
                 request = queries.submit(() -> {
                     try (SessionMeter meter = new SessionMeter(Dashboard.this)) {
-                        SessionMeter.State latest = meter.read();
+                        SessionMeter.State latest = meter.read(wanted);
                         List<Usage.App> ranked = Usage.ranked(Dashboard.this, latest.appAmounts());
                         runOnUiThread(() -> {
                             if (token != revision || isDestroyed()) return;
@@ -807,7 +968,7 @@ public final class Dashboard extends Activity {
         private void updateControls() {
             int phase = SessionService.phase();
             boolean hasPoints = state != null && !state.points.isEmpty();
-            boolean running = phase == SessionService.RUNNING;
+            boolean running = historyId == 0 && phase == SessionService.RUNNING;
             boolean available = phase == SessionService.IDLE || running;
             toggle.setEnabled(available);
             toggle.setAlpha(available ? 1f : 0.62f);
@@ -820,11 +981,13 @@ public final class Dashboard extends Activity {
             String error = SessionService.error();
             if (error != null) status.setText(error);
             else if (unavailable) status.setText("Sayaç kaydı okunamadı. Yenile’ye dokun.");
-            else if (phase == SessionService.STARTING) status.setText("Ölçüm başlatılıyor…");
-            else if (phase == SessionService.STOPPING) status.setText("Son ölçüm kaydediliyor…");
+            else if (historyId == 0 && phase == SessionService.STARTING) status.setText("Ölçüm başlatılıyor…");
+            else if (historyId == 0 && phase == SessionService.STOPPING) status.setText("Son ölçüm kaydediliyor…");
             else if (running) status.setText("Ölçüm sürüyor · Mobil veri");
-            else if (hasPoints && state.storedActive) status.setText("Ölçüm kesildi · Son kayda kadar");
-            else status.setText(hasPoints ? "Son ölçüm · Yeni ölçüm bu sonucu değiştirir." : "Başlat ve Bitir arasındaki mobil veri ölçülür.");
+            else if (hasPoints && (state.interrupted || (state.storedActive && phase == SessionService.IDLE))) {
+                status.setText("Ölçüm kesildi · Son kayda kadar");
+            } else status.setText(hasPoints ? (historyId > 0 ? "Geçmiş oturum" : "Son ölçüm")
+                    : "Başlat ve Bitir arasındaki mobil veri ölçülür.");
         }
 
         private void showResults() {
@@ -832,13 +995,16 @@ public final class Dashboard extends Activity {
             if (state.points.isEmpty()) return;
 
             LinearLayout totals = sessionCard();
-            totals.addView(label("Mobil veri toplamı", 14, colors.secondary, true));
+            totals.addView(label(state.title.isEmpty() ? "Mobil veri toplamı" : state.title, 17, colors.text, true));
             totals.addView(label(Usage.format(state.amount(SessionMeter.TOTAL)), 32, colors.accent, true));
+            long hourly = state.hourlyEstimate();
+            if (hourly >= 0) paragraph(totals, "Bu hızla yaklaşık " + Usage.format(hourly) + "/saat");
             totals.addView(label("Hotspot · " + Usage.format(state.amount(Usage.HOTSPOT)), 16, colors.hotspot, true));
             ZoneId zone = ZoneId.systemDefault();
             String start = Instant.ofEpochMilli(state.points.get(0).wall).atZone(zone).format(SESSION_TIME);
             String end = Instant.ofEpochMilli(state.last().wall).atZone(zone).format(SESSION_TIME);
             paragraph(totals, start + " – " + end);
+            totals.addView(action("Oturumu adlandır", () -> nameSession(state.id, state.title)));
 
             LinearLayout graph = sessionCard();
             LinearLayout switches = row();
@@ -879,6 +1045,61 @@ public final class Dashboard extends Activity {
                     }
                 });
             });
+        }
+
+        private void openHistory() {
+            queries.execute(() -> {
+                try (SessionMeter meter = new SessionMeter(Dashboard.this)) {
+                    List<SessionMeter.Entry> history = meter.history();
+                    runOnUiThread(() -> {
+                        if (token != revision || !visible || isFinishing()) return;
+                        AlertDialog.Builder dialog = new AlertDialog.Builder(Dashboard.this)
+                                .setTitle("Oturum geçmişi").setNegativeButton("Kapat", null);
+                        if (history.isEmpty()) dialog.setMessage("Henüz kayıtlı ölçüm yok.");
+                        else {
+                            String[] entries = new String[history.size()];
+                            for (int i = 0; i < entries.length; i++) {
+                                SessionMeter.Entry item = history.get(i);
+                                String date = Instant.ofEpochMilli(item.started).atZone(ZoneId.systemDefault()).format(SESSION_TIME);
+                                entries[i] = item.title.isEmpty() ? date : item.title + " · " + date;
+                            }
+                            dialog.setItems(entries, (d, index) -> {
+                                historyId = history.get(index).id;
+                                sessionMetric = SessionMeter.TOTAL;
+                                render();
+                            });
+                        }
+                        dialog.show();
+                    });
+                } catch (RuntimeException error) {
+                    runOnUiThread(() -> {
+                        if (token == revision) status.setText("Oturum geçmişi okunamadı.");
+                    });
+                }
+            });
+        }
+
+        private void nameSession(long id, String name) {
+            EditText input = new EditText(Dashboard.this);
+            input.setSingleLine(true);
+            input.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(60)});
+            input.setText(name);
+            new AlertDialog.Builder(Dashboard.this).setTitle("Oturum adı").setView(input)
+                    .setNegativeButton("Vazgeç", null).setPositiveButton("Kaydet", (d, w) -> {
+                        String title = input.getText().toString().trim();
+                        queries.execute(() -> {
+                            try (SessionMeter meter = new SessionMeter(Dashboard.this)) {
+                                meter.rename(id, title);
+                                runOnUiThread(() -> {
+                                    if (token == revision) seenRevision = Integer.MIN_VALUE;
+                                });
+                            } catch (RuntimeException error) {
+                                runOnUiThread(() -> {
+                                    if (token == revision) status.setText("Oturum adı kaydedilemedi.");
+                                });
+                            }
+                        });
+                    }).show();
         }
 
         private LinearLayout sessionCard() {

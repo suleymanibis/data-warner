@@ -30,6 +30,10 @@ public final class Monitor extends BroadcastReceiver {
     private static final String WINDOW = "report_time";
     static final String SUMMARY_CHANNEL = "summary";
     static final String ALERT_CHANNEL = "threshold";
+    static final String PLAN_CHANNEL = "plan";
+    static final String OPEN_ALERT = "tr.suleyman.mobilveri.OPEN_ALERT";
+    static final String ALERT_END = "alert_end";
+    static final String ALERT_DURATION = "alert_duration";
     private static final int FLAGS = PendingIntent.FLAG_IMMUTABLE;
     private static final long SAMPLE_INTERVAL = 15 * 60_000L;
     private static final long MIN_SAMPLE_INTERVAL = 60_000L;
@@ -72,6 +76,7 @@ public final class Monitor extends BroadcastReceiver {
                     safely(() -> report(app, intent.getLongExtra(WINDOW, 0)));
                 }
                 safely(() -> sample(app, true));
+                safely(() -> PlanWidget.refresh(app, true));
             } finally {
                 result.finish();
             }
@@ -206,7 +211,10 @@ public final class Monitor extends BroadcastReceiver {
                 String title = measured ? "Mobil veri sınırı aşıldı" : "Tahmini mobil veri sınırı aşıldı";
                 String amount = Usage.format(measured ? live.lower : system.lower);
                 String detail = " • Sınır " + rule.limit();
-                if (notify(context, 2, ALERT_CHANNEL, title, amount + detail)) {
+                Intent openAlert = new Intent(context, Dashboard.class).setAction(OPEN_ALERT)
+                        .putExtra(ALERT_END, wall).putExtra(ALERT_DURATION, rule.duration())
+                        .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                if (notify(context, 2, ALERT_CHANNEL, title, amount + detail, openAlert)) {
                     prefs.edit().putInt("alert_boot", boot).putLong("alert_sent_bytes", rule.bytes)
                             .putInt("alert_sent_minutes", rule.minutes).putBoolean("high", true).apply();
                 }
@@ -262,20 +270,41 @@ public final class Monitor extends BroadcastReceiver {
                 "Günlük kullanım özeti", NotificationManager.IMPORTANCE_LOW));
         manager.createNotificationChannel(new NotificationChannel(ALERT_CHANNEL,
                 "Mobil veri sınırı uyarısı", NotificationManager.IMPORTANCE_DEFAULT));
+        manager.createNotificationChannel(new NotificationChannel(PLAN_CHANNEL,
+                "Aylık paket uyarısı", NotificationManager.IMPORTANCE_DEFAULT));
     }
 
     private static boolean notify(Context context, int id, String channel, String title, String body) {
+        return notify(context, id, channel, title, body, new Intent(context, Dashboard.class));
+    }
+
+    private static boolean notify(Context context, int id, String channel, String title, String body, Intent intent) {
         NotificationManager manager = context.getSystemService(NotificationManager.class);
         if (!manager.areNotificationsEnabled()
                 || manager.getNotificationChannel(channel).getImportance() == NotificationManager.IMPORTANCE_NONE) {
             return false;
         }
-        PendingIntent open = PendingIntent.getActivity(context, 0, new Intent(context, Dashboard.class), FLAGS);
+        PendingIntent open = PendingIntent.getActivity(context, id, intent, FLAGS | PendingIntent.FLAG_UPDATE_CURRENT);
         Notification notification = new Notification.Builder(context, channel)
                 .setSmallIcon(R.drawable.ic_data).setContentTitle(title).setContentText(body)
                 .setContentIntent(open).setAutoCancel(true).build();
         manager.notify(id, notification);
         return true;
+    }
+
+    static void notifyPlan(Context context, DataPlan plan, DataPlan.Snapshot snapshot) {
+        int level = snapshot.level();
+        if (level == 0) return;
+        SharedPreferences prefs = DataPlan.prefs(context);
+        DataPlan latest = DataPlan.load(context);
+        if (latest.capacity != plan.capacity || latest.renewalDay != plan.renewalDay) return;
+        String key = snapshot.start.toString();
+        boolean sameCycle = key.equals(prefs.getString("notified_key", ""));
+        if (sameCycle && level <= prefs.getInt("notified_level", 0)) return;
+        if (notify(context, 4, PLAN_CHANNEL, "Mobil veri paketi %" + level + " eşiğini geçti",
+                "Kalan " + Usage.format(snapshot.remaining()))) {
+            prefs.edit().putString("notified_key", key).putInt("notified_level", level).apply();
+        }
     }
 
     private static final class Samples extends SQLiteOpenHelper {

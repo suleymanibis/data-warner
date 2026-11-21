@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory = $true)][string]$Jdk,
     [string]$Platform = 'android-36',
     [string]$BuildTools = '35.0.0',
-    [string]$Destination = (Join-Path $PSScriptRoot 'build\Mobil-Veri.apk'),
+    [string]$Destination = (Join-Path $PSScriptRoot 'build\Data-Warner.apk'),
     [string]$SigningKey = (Join-Path $PSScriptRoot 'build\mobil-veri.jks')
 )
 
@@ -13,6 +13,7 @@ $jar = Join-Path $Sdk "platforms\$Platform\android.jar"
 $bin = Join-Path $Jdk 'bin'
 $env:JAVA_HOME = $Jdk
 $build = Join-Path $PSScriptRoot 'build'
+$app = Join-Path $PSScriptRoot 'app\src\main'
 $classes = Join-Path $build 'classes'
 $generated = Join-Path $build 'generated'
 $dex = Join-Path $build 'dex'
@@ -24,6 +25,7 @@ $aapt2 = Join-Path $tools 'aapt2.exe'
 $zipalign = Join-Path $tools 'zipalign.exe'
 $apksigner = Join-Path $tools 'apksigner.bat'
 $keytool = Join-Path $bin 'keytool.exe'
+$manifest = Join-Path $build 'AndroidManifest.xml'
 
 function Invoke-Checked([string]$Program, [string[]]$Arguments) {
     & $Program @Arguments
@@ -31,9 +33,12 @@ function Invoke-Checked([string]$Program, [string[]]$Arguments) {
 }
 
 New-Item -ItemType Directory -Force $classes, $generated, $dex, (Split-Path $Destination -Parent), (Split-Path $SigningKey -Parent) | Out-Null
-Invoke-Checked $aapt2 @('compile', '--dir', (Join-Path $PSScriptRoot 'res'), '-o', $resources)
-Invoke-Checked $aapt2 @('link', '-I', $jar, '--manifest', (Join-Path $PSScriptRoot 'AndroidManifest.xml'), '--java', $generated, '-o', $base, $resources)
-$sources = @(Get-ChildItem (Join-Path $PSScriptRoot 'src'), $generated -Recurse -Filter '*.java' | Select-Object -ExpandProperty FullName)
+[xml]$appManifest = Get-Content -LiteralPath (Join-Path $app 'AndroidManifest.xml') -Raw -Encoding utf8
+$appManifest.DocumentElement.SetAttribute('package', 'tr.suleyman.mobilveri')
+$appManifest.Save($manifest)
+Invoke-Checked $aapt2 @('compile', '--dir', (Join-Path $app 'res'), '-o', $resources)
+Invoke-Checked $aapt2 @('link', '-I', $jar, '--manifest', $manifest, '--java', $generated, '-o', $base, $resources)
+$sources = @(Get-ChildItem (Join-Path $app 'java'), $generated -Recurse -Filter '*.java' | Select-Object -ExpandProperty FullName)
 Invoke-Checked (Join-Path $bin 'javac.exe') (@('--release', '8', '-encoding', 'UTF-8', '-classpath', $jar, '-d', $classes) + $sources)
 $inputs = @(Get-ChildItem $classes -Recurse -Filter '*.class' | Select-Object -ExpandProperty FullName)
 Invoke-Checked (Join-Path $bin 'java.exe') (@('-cp', (Join-Path $tools 'lib\d8.jar'), 'com.android.tools.r8.D8', '--release', '--min-api', '30', '--lib', $jar, '--output', $dex) + $inputs)

@@ -34,6 +34,7 @@ public final class SessionService extends Service {
     private final ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor();
     private long anchor;
     private long started;
+    private long sessionId;
 
     static int phase() { return phase; }
     static int revision() { return REVISION.get(); }
@@ -99,7 +100,7 @@ public final class SessionService extends Service {
         anchor = Math.max(0, point.wall - 24 * Usage.HOUR);
         started = point.elapsed;
         try (SessionMeter meter = new SessionMeter(this)) {
-            meter.begin(withApps(point));
+            sessionId = meter.begin(withApps(point));
             updatePhase(RUNNING);
             nextSample();
         } catch (RuntimeException failure) {
@@ -116,7 +117,7 @@ public final class SessionService extends Service {
     private void sample() {
         if (phase != RUNNING) return;
         try (SessionMeter meter = new SessionMeter(this)) {
-            meter.record(withApps(SessionMeter.Point.capture()));
+            meter.record(sessionId, withApps(SessionMeter.Point.capture()));
             REVISION.incrementAndGet();
             nextSample();
         } catch (RuntimeException failure) {
@@ -126,7 +127,7 @@ public final class SessionService extends Service {
 
     private void finish(SessionMeter.Point point, int startId) {
         try (SessionMeter meter = new SessionMeter(this)) {
-            meter.end(withApps(point));
+            meter.end(sessionId, withApps(point));
             REVISION.incrementAndGet();
             stopForeground(STOP_FOREGROUND_REMOVE);
             stopSelf(startId);
