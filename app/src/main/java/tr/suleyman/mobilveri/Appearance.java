@@ -25,16 +25,16 @@ final class Appearance {
 
     Appearance(boolean light) {
         this.light = light;
-        background = light ? 0xffeff2fa : 0xff10121e;
-        surface = light ? 0xffffffff : 0xff191d30;
-        border = light ? 0xffd1d9eb : 0xff323a57;
-        text = light ? 0xff17203c : 0xfff3f4ff;
-        secondary = light ? 0xff4f5b75 : 0xffaeb7d1;
-        accent = light ? 0xff3854ba : 0xffa6b6ff;
-        hotspot = light ? 0xff106958 : 0xff6fe0cb;
-        warning = light ? 0xff805308 : 0xfff7cc8b;
-        onAccent = light ? 0xffffffff : 0xff10121e;
-        iconBackground = light ? 0xffe2e9ff : 0xff273351;
+        background = light ? 0xfff4f6fa : 0xff101521;
+        surface = light ? 0xffffffff : 0xff191f2d;
+        border = light ? 0xffdfe5ee : 0xff333d50;
+        text = light ? 0xff172033 : 0xfff2f5fc;
+        secondary = light ? 0xff536175 : 0xffadb8ca;
+        accent = light ? 0xff2854bf : 0xffa5bdff;
+        hotspot = light ? 0xff106b56 : 0xff6fdfc2;
+        warning = light ? 0xff8c4e08 : 0xffffc78c;
+        onAccent = light ? 0xffffffff : background;
+        iconBackground = light ? 0xffe9efff : 0xff293954;
     }
 
     static int mode(Context context) {

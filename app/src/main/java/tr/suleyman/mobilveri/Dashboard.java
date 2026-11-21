@@ -11,9 +11,7 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.graphics.Canvas;
-import android.graphics.LinearGradient;
 import android.graphics.Paint;
-import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
@@ -66,11 +64,10 @@ public final class Dashboard extends Activity {
     private Appearance colors;
     private FrameLayout root;
     private FrameLayout drawer;
-    private ImageButton settingsButton;
+    private View settingsButton;
     private boolean drawerOpen;
     private LinearLayout main;
     private LinearLayout content;
-    private LinearLayout hero;
     private int tab;
     private int mode;
     private int range = 2;
@@ -204,21 +201,26 @@ public final class Dashboard extends Activity {
         setContentView(root);
 
         LinearLayout header = row();
-        header.setPadding(dp(16), dp(10), dp(13), dp(10));
-        settingsButton = new ImageButton(this);
-        settingsButton.setImageResource(R.mipmap.ic_launcher);
-        settingsButton.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        settingsButton.setPadding(dp(2), dp(2), dp(2), dp(2));
-        settingsButton.setContentDescription("Ayarlar panelini aç");
-        settingsButton.setBackground(interactive(0x00000000, 14, 0));
-        settingsButton.setOnClickListener(view -> openDrawer());
-        header.addView(settingsButton, new LinearLayout.LayoutParams(dp(48), dp(48)));
-        LinearLayout identity = column();
-        identity.setPadding(dp(10), 0, dp(5), 0);
-        identity.addView(label(getString(R.string.app_name), 22, colors.text, true));
-        identity.addView(label("Mobil veri takibi", 12, colors.secondary, false));
+        header.setPadding(dp(12), dp(4), dp(12), dp(4));
+        LinearLayout menu = row();
+        menu.setPadding(dp(4), 0, dp(4), 0);
+        menu.addView(icon(R.drawable.ic_menu, colors.text), new LinearLayout.LayoutParams(dp(22), dp(22)));
+        ImageView brand = new ImageView(this);
+        brand.setImageResource(R.mipmap.ic_launcher);
+        brand.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        LinearLayout.LayoutParams logo = new LinearLayout.LayoutParams(dp(30), dp(30));
+        logo.setMarginStart(dp(4));
+        menu.addView(brand, logo);
+        menu.setContentDescription("Ayarlar panelini aç");
+        menu.setBackground(interactive(0, 12, 0));
+        menu.setOnClickListener(view -> openDrawer());
+        menu.setFocusable(true);
+        settingsButton = menu;
+        header.addView(menu, new LinearLayout.LayoutParams(-2, dp(48)));
+        TextView identity = label(getString(R.string.app_name), 21, colors.text, true);
+        identity.setPadding(dp(8), 0, dp(4), 0);
         header.addView(identity, new LinearLayout.LayoutParams(0, -2, 1));
-        header.addView(action("Yenile", this::render));
+        header.addView(iconButton(R.drawable.ic_refresh, "Yenile", this::render), touchTarget());
         main.addView(header);
 
         ScrollView scroll = new ScrollView(this);
@@ -246,12 +248,6 @@ public final class Dashboard extends Activity {
             new SessionPanel(token).show();
             return;
         }
-        if (tab == 0 && !getSystemService(NotificationManager.class).areNotificationsEnabled()) {
-            LinearLayout notifications = card();
-            notifications.addView(label("Bildirimler kapalı", 15, colors.warning, true));
-            notifications.addView(action("Bildirimleri aç", this::enableNotifications));
-        }
-
         ZonedDateTime snapshot = ZonedDateTime.now();
         LocalDate today = snapshot.toLocalDate();
         long now = snapshot.toInstant().toEpochMilli();
@@ -265,30 +261,41 @@ public final class Dashboard extends Activity {
             TextView heading = label(app == null ? "Uygulama kullanımı" : app.name, 22, colors.text, true);
             heading.setPadding(dp(4), dp(8), dp(4), dp(8));
             content.addView(heading);
-            addSelector(RANGES, range, value -> {
+        }
+        LinearLayout chartPanel = tab == 1 && app == null ? null : card();
+        LinearLayout chartSummary = chartPanel == null ? null : column();
+        if (chartSummary != null) {
+            chartPanel.addView(chartSummary);
+            chartSummary.addView(label(summaryTitle(tab, app != null, mode, daysBack, today), 14, colors.secondary, true));
+        }
+        if (tab == 1) {
+            addSelector(chartPanel == null ? content : chartPanel, RANGES, range, value -> {
                 if (range != value) selectedBar = -1;
                 range = value;
                 render();
             });
         } else {
-            hero = card();
-            setHeroStyle(hero, tab);
-            hero.addView(label(summaryTitle(tab, false, mode, daysBack, today), 14, colors.text, true));
-            hero.addView(label("—", 42, tab == 2 ? colors.hotspot : colors.accent, true));
-            if (tab == 0) addPlanCard(token, snapshot);
-            addSelector(MODES, mode, value -> {
+            addSelector(chartPanel, MODES, mode, value -> {
                 if (mode != value) selectedBar = -1;
                 mode = value;
                 render();
             });
-            if (mode == 0) addDatePicker(today, zone);
+            if (mode == 0) addDatePicker(chartPanel, today, zone);
         }
         ProgressBar progress = new ProgressBar(this);
         progress.setIndeterminateTintList(ColorStateList.valueOf(colors.accent));
         LinearLayout.LayoutParams progressLayout = new LinearLayout.LayoutParams(dp(28), dp(28));
         progressLayout.gravity = Gravity.CENTER_HORIZONTAL;
         progressLayout.setMargins(0, dp(24), 0, dp(16));
-        content.addView(progress, progressLayout);
+        (chartPanel == null ? content : chartPanel).addView(progress, progressLayout);
+        if (tab == 0) {
+            addPlanCard(token, snapshot);
+            if (!getSystemService(NotificationManager.class).areNotificationsEnabled()) {
+                LinearLayout notifications = card();
+                notifications.addView(label("Bildirimler kapalı", 15, colors.warning, true));
+                notifications.addView(action("Bildirimleri aç", this::enableNotifications));
+            }
+        }
 
         int selectedTab = tab;
         int selectedMode = mode;
@@ -297,7 +304,6 @@ public final class Dashboard extends Activity {
         Usage.App selectedApp = app;
         request = queries.submit(() -> {
             try {
-                long todayStart = Usage.startOf(today, zone);
                 if (selectedTab == 1 && selectedApp == null) {
                     long start = now - RANGE_HOURS[selectedRange] * Usage.HOUR;
                     Map<Integer, Long> counts = Usage.apps(this, start, now);
@@ -316,12 +322,11 @@ public final class Dashboard extends Activity {
                 }
                 Long spanTotal = populatePeriods(periods, now, (start, end) -> read(uid, start, end));
                 if (spanTotal == null || Thread.currentThread().isInterrupted()) return;
-                long total = selectedApp != null || selectedMode == 0
-                        ? spanTotal : read(uid, todayStart, now);
-                updated(token, progress, () -> showChart(periods, total, selectedTab, selectedApp, snapshot));
+                updated(token, progress, () -> showChart(chartPanel, chartSummary, periods, spanTotal, selectedTab,
+                        selectedApp, snapshot));
             } catch (RuntimeException error) {
                 android.util.Log.w("MobilVeri", "Kullanım verileri okunamadı", error);
-                updated(token, progress, () -> paragraph(card(),
+                updated(token, progress, () -> paragraph(chartPanel == null ? card() : chartPanel,
                         "Mobil veri kayıtları okunamadı. Kullanım erişimini kontrol edip Yenile’ye dokun."));
             }
         });
@@ -331,9 +336,9 @@ public final class Dashboard extends Activity {
         LinearLayout panel = card();
         LinearLayout heading = row();
         heading.addView(label("Mobil veri paketi", 17, colors.text, true), new LinearLayout.LayoutParams(0, -2, 1));
-        heading.addView(action("Ayarla", this::editPlan));
-        panel.addView(heading);
         DataPlan plan = DataPlan.load(this);
+        heading.addView(action(plan.capacity == 0 ? "Ayarla" : "Düzenle", this::editPlan));
+        panel.addView(heading);
         TextView details = label(plan.capacity == 0 ? "Paket boyutunu ve yenilenme gününü gir." : "Paket hesaplanıyor…",
                 14, colors.secondary, false);
         panel.addView(details);
@@ -343,14 +348,16 @@ public final class Dashboard extends Activity {
                 DataPlan.Snapshot value = plan.read(this, now);
                 runOnUiThread(() -> {
                     if (token != revision || isDestroyed()) return;
-                    details.setText("Kalan " + Usage.format(value.remaining()) + " / " + Usage.format(value.capacity));
-                    details.setTextColor(colors.accent);
-                    details.setTextSize(23);
+                    details.setText(Usage.format(value.remaining()) + " kaldı");
+                    details.setTextColor(colors.text);
+                    details.setTextSize(24);
+                    details.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
                     ProgressBar progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
                     progress.setProgressTintList(ColorStateList.valueOf(value.level() > 0 ? colors.warning : colors.accent));
                     progress.setProgress(value.percent());
                     panel.addView(progress);
-                    paragraph(panel, value.next.format(DATE) + " yenileme · " + value.days + " gün kaldı"
+                    paragraph(panel, "Paket " + Usage.format(value.capacity) + " · Yenileme " + value.next.format(DATE)
+                            + " (" + value.days + " gün)"
                             + "\nGünlük bütçe " + Usage.format(value.perDay()) + " · Android ölçümü");
                 });
             } catch (RuntimeException error) {
@@ -428,7 +435,7 @@ public final class Dashboard extends Activity {
                     LinearLayout breakdown = card();
                     breakdown.addView(label("En çok veri kullanan uygulamalar", 16, colors.text, true));
                     if (apps.isEmpty()) paragraph(breakdown, "Bu aralık için henüz uygulama kaydı yok.");
-                    else addAppRows(breakdown, apps.subList(0, Math.min(5, apps.size())), null);
+                    else addAppRows(breakdown, apps, 5, null);
                 });
             } catch (RuntimeException error) {
                 runOnUiThread(() -> {
@@ -441,21 +448,37 @@ public final class Dashboard extends Activity {
     private void addNavigation() {
         LinearLayout nav = row();
         nav.setBackgroundColor(colors.surface);
-        nav.setPadding(dp(13), dp(8), dp(13), dp(8));
+        nav.setPadding(dp(8), dp(4), dp(8), dp(4));
+        nav.setElevation(dp(3));
         String[] names = {"Genel", "Uygulamalar", "Hotspot", "Sayaç"};
+        int[] icons = {R.drawable.ic_overview, R.drawable.ic_apps, R.drawable.ic_hotspot, R.drawable.ic_timer};
         for (int i = 0; i < names.length; i++) {
             int target = i;
-            TextView view = chip(names[i], tab == i, () -> {
+            boolean selected = tab == i;
+            int color = selected ? colors.accent : colors.secondary;
+            LinearLayout view = column();
+            view.setGravity(Gravity.CENTER);
+            view.setMinimumHeight(dp(56));
+            view.setBackground(interactive(0, 12, 0));
+            ImageView image = icon(icons[i], color);
+            image.setPadding(dp(11), dp(4), dp(11), dp(4));
+            if (selected) image.setBackground(shape(colors.iconBackground, 16, 0));
+            view.addView(image, new LinearLayout.LayoutParams(dp(44), dp(30)));
+            TextView caption = label(names[i], 11, color, selected);
+            caption.setGravity(Gravity.CENTER);
+            caption.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            view.addView(caption, new LinearLayout.LayoutParams(-1, -2));
+            view.setContentDescription(names[i]);
+            view.setSelected(selected);
+            view.setFocusable(true);
+            view.setOnClickListener(clicked -> {
                 if (tab != target || app != null) selectedBar = -1;
                 tab = target;
                 historyId = 0;
                 app = null;
                 render();
             });
-            LinearLayout.LayoutParams layout = new LinearLayout.LayoutParams(0, -2, i == 1 ? 1.4f : 1f);
-            view.setMinHeight(dp(48));
-            layout.setMargins(dp(2), 0, dp(2), 0);
-            nav.addView(view, layout);
+            nav.addView(view, new LinearLayout.LayoutParams(0, -2, i == 1 ? 1.25f : 1f));
         }
         main.addView(nav);
     }
@@ -657,7 +680,7 @@ public final class Dashboard extends Activity {
     private void updated(int token, View progress, Runnable show) {
         runOnUiThread(() -> {
             if (token == revision && !isFinishing() && !isDestroyed()) {
-                content.removeView(progress);
+                ((LinearLayout) progress.getParent()).removeView(progress);
                 show.run();
             }
         });
@@ -696,16 +719,18 @@ public final class Dashboard extends Activity {
         return previous;
     }
 
-    private void addDatePicker(LocalDate today, ZoneId zone) {
+    private void addDatePicker(LinearLayout panel, LocalDate today, ZoneId zone) {
         LinearLayout dateRow = row();
-        dateRow.addView(action("‹", () -> {
+        ImageButton previous = iconButton(R.drawable.ic_previous, "Önceki gün", () -> {
             daysBack++;
             selectedBar = -1;
             render();
-        }, daysBack < 29, "Önceki gün"));
+        });
+        previous.setEnabled(daysBack < 29);
+        dateRow.addView(previous, touchTarget());
         LocalDate selected = today.minusDays(daysBack);
         String dateLabel = daysBack == 0 ? "Bugün" : selected.format(FULL_DATE);
-        TextView day = action(dateLabel + "  ▾", () -> {
+        TextView day = action(dateLabel, () -> {
             DatePickerDialog dialog = new DatePickerDialog(this, (view, year, month, dayOfMonth) -> {
                 LocalDate date = LocalDate.of(year, month + 1, dayOfMonth);
                 daysBack = Math.toIntExact(today.toEpochDay() - date.toEpochDay());
@@ -716,30 +741,39 @@ public final class Dashboard extends Activity {
             dialog.getDatePicker().setMinDate(Usage.startOf(today.minusDays(29), zone));
             dialog.show();
         }, true, "Tarih seç. " + dateLabel);
-        dateRow.addView(day, new LinearLayout.LayoutParams(0, dp(48), 1));
-        dateRow.addView(action("›", () -> {
+        android.graphics.drawable.Drawable calendar = getDrawable(R.drawable.ic_calendar).mutate();
+        calendar.setTint(colors.accent);
+        day.setCompoundDrawablesRelativeWithIntrinsicBounds(calendar, null, null, null);
+        day.setCompoundDrawablePadding(dp(6));
+        dateRow.addView(day, new LinearLayout.LayoutParams(0, -2, 1));
+        ImageButton next = iconButton(R.drawable.ic_next, "Sonraki gün", () -> {
             daysBack--;
             selectedBar = -1;
             render();
-        }, daysBack > 0, "Sonraki gün"));
-        content.addView(dateRow);
+        });
+        next.setEnabled(daysBack > 0);
+        dateRow.addView(next, touchTarget());
+        panel.addView(dateRow);
     }
 
     private interface Selection { void select(int value); }
 
-    private void addSelector(String[] items, int current, Selection callback) {
+    private void addSelector(LinearLayout parent, String[] items, int current, Selection callback) {
         HorizontalScrollView horizontal = new HorizontalScrollView(this);
         horizontal.setHorizontalScrollBarEnabled(false);
         horizontal.setFillViewport(true);
         LinearLayout switches = row();
+        switches.setBackground(shape(colors.background, 12, 0));
         for (int i = 0; i < items.length; i++) {
             int index = i;
-            LinearLayout.LayoutParams layout = new LinearLayout.LayoutParams(-2, dp(43), 1);
+            LinearLayout.LayoutParams layout = new LinearLayout.LayoutParams(-2, -2, 1);
             layout.setMargins(dp(2), dp(3), dp(2), dp(3));
-            switches.addView(chip(items[i], i == current, () -> callback.select(index)), layout);
+            TextView option = chip(items[i], i == current, () -> callback.select(index));
+            option.setMinHeight(dp(48));
+            switches.addView(option, layout);
         }
         horizontal.addView(switches);
-        content.addView(horizontal);
+        parent.addView(horizontal);
         View chosen = switches.getChildAt(current);
         horizontal.post(() -> {
             if (chosen.getRight() > horizontal.getWidth()) {
@@ -750,6 +784,7 @@ public final class Dashboard extends Activity {
 
     static String summaryTitle(int selectedTab, boolean appDetail, int mode, int daysBack, LocalDate today) {
         if (appDetail) return "Seçilen aralıktaki toplam";
+        if (mode != 0) return selectedTab == 2 ? "Son 30 gün · Hotspot" : "Son 30 gün · Mobil veri";
         if (mode == 0 && daysBack > 0) {
             String metric = selectedTab == 2 ? "İnternet paylaşımı" : "Mobil veri";
             return metric + " · " + today.minusDays(daysBack).format(FULL_DATE);
@@ -757,64 +792,38 @@ public final class Dashboard extends Activity {
         return selectedTab == 2 ? "Bugünkü internet paylaşımı" : "Bugünkü mobil veri";
     }
 
-    private void setHeroStyle(LinearLayout view, int selectedTab) {
-        boolean hotspot = selectedTab == 2;
-        int top = colors.light ? (hotspot ? 0xffd8f3ea : 0xffdce5ff) : (hotspot ? 0xff143c3c : 0xff28355f);
-        int bottom = colors.light ? (hotspot ? 0xfff4fcf8 : 0xfff5f7ff) : (hotspot ? 0xff16262e : 0xff1d203b);
-        int stroke = colors.light ? (hotspot ? 0xffa8d7c9 : 0xffb6c5ee) : (hotspot ? 0xff346660 : 0xff485581);
-        GradientDrawable gradient = new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{top, bottom});
-        gradient.setCornerRadius(dp(22));
-        gradient.setStroke(dp(1), stroke);
-        view.setBackground(gradient);
-        view.setPadding(dp(19), dp(19), dp(19), dp(17));
-    }
-
-    private void showChart(List<Period> periods, long total, int selectedTab, Usage.App selectedApp,
-                           ZonedDateTime snapshot) {
+    private void showChart(LinearLayout graph, LinearLayout usage, List<Period> periods, long total,
+                           int selectedTab, Usage.App selectedApp, ZonedDateTime snapshot) {
         int accent = selectedTab == 2 ? colors.hotspot : colors.accent;
-        LinearLayout usage = selectedApp == null ? hero : card();
         usage.removeAllViews();
-        setHeroStyle(usage, selectedTab);
         String totalTitle = summaryTitle(selectedTab, selectedApp != null, mode, daysBack, snapshot.toLocalDate());
-        TextView heading = label(totalTitle, 14, colors.text, true);
+        TextView heading = label(totalTitle, 14, colors.secondary, true);
         heading.setAccessibilityHeading(true);
         usage.addView(heading);
         TextView amount = label(Usage.format(total), 44, accent, true);
         amount.setFontFeatureSettings("tnum");
-        amount.setPadding(0, dp(4), 0, dp(6));
+        amount.setPadding(0, 0, 0, dp(8));
         usage.addView(amount);
-        boolean nowDay = mode != 0 || daysBack == 0;
-        String totalHint = selectedApp != null ? "Uygulamanın mobil veri kullanımı"
-                : selectedTab == 0 ? (nowDay ? "00:00’dan beri • Hotspot dahil" : "Gün toplamı • Hotspot dahil")
-                : total > 0 ? "Mobil veri paylaşımı" : "Android’de bu gün için paylaşım kaydı yok";
-        TextView usageHint = label(totalHint, 13, colors.secondary, false);
-        usage.addView(usageHint);
-
-        LinearLayout graph = card();
-        LinearLayout chartHeader = row();
-        TextView chartTitle = label("Kullanım grafiği", 18, colors.text, true);
-        chartTitle.setAccessibilityHeading(true);
-        chartHeader.addView(chartTitle, new LinearLayout.LayoutParams(0, -2, 1));
-        graph.addView(chartHeader);
         selectedBar = availableBar(periods, selectedBar);
-        LinearLayout inspector = row();
-        inspector.setBackground(shape(colors.background, 12, colors.border));
-        TextView detail = label("", 13, colors.text, true);
-        detail.setPadding(dp(6), dp(4), dp(6), dp(4));
-        detail.setGravity(Gravity.CENTER);
         BarChart chart = new BarChart(periods, accent, selectedBar);
+        LinearLayout controls = row();
+        String chartHint = selectedTab == 2 ? "Wi-Fi, USB ve Bluetooth dahil"
+                : selectedTab == 0 ? "Hotspot dahil" : "Grafikten bir aralık seç";
+        TextView hint = label(chartHint, 12, colors.secondary, false);
+        controls.addView(hint, new LinearLayout.LayoutParams(0, -2, 1));
         TextView reset = action("Toplama dön", () -> chart.choose(-1));
-        chartHeader.addView(reset);
-        TextView previous = action("‹", () -> chart.step(-1), true, "Önceki grafik aralığı");
-        TextView next = action("›", () -> chart.step(1), true, "Sonraki grafik aralığı");
+        controls.addView(reset);
+        ImageButton previous = iconButton(R.drawable.ic_previous, "Önceki grafik aralığı", () -> chart.step(-1));
+        ImageButton next = iconButton(R.drawable.ic_next, "Sonraki grafik aralığı", () -> chart.step(1));
+        controls.addView(previous, touchTarget());
+        controls.addView(next, touchTarget());
         chart.selection = value -> {
             selectedBar = value;
             Period period = value < 0 ? null : periods.get(value);
             heading.setText(period == null ? totalTitle : period.description);
             amount.setText(Usage.format(period == null ? total : period.bytes));
-            usageHint.setText(period == null ? totalHint : selectedTab == 2 ? "İnternet paylaşımı" : "Mobil veri kullanımı");
-            detail.setText(period == null ? "Grafikten bir aralık seç" : period.description);
             reset.setVisibility(period == null ? View.GONE : View.VISIBLE);
+            hint.setVisibility(period == null ? View.VISIBLE : View.INVISIBLE);
             previous.setEnabled(chart.canStep(-1));
             next.setEnabled(chart.canStep(1));
             if (period != null && graph.isAttachedToWindow()) {
@@ -822,36 +831,30 @@ public final class Dashboard extends Activity {
             }
         };
         chart.selection.select(selectedBar);
-        graph.addView(chart, new LinearLayout.LayoutParams(-1, dp(186)));
-        inspector.addView(previous);
-        inspector.addView(detail, new LinearLayout.LayoutParams(0, -2, 1));
-        inspector.addView(next);
-        graph.addView(inspector);
-        paragraph(graph, selectedTab == 2
-                ? "Android, Wi-Fi, USB ve Bluetooth paylaşımını tek toplam olarak bildirir. Kısa aralıklar yaklaşık olabilir."
-                : "Kısa aralıklar Android’in kayıt sıklığına göre yaklaşık değerlerdir.");
+        graph.addView(chart, new LinearLayout.LayoutParams(-1, dp(164)));
+        graph.addView(controls);
+        graph.addView(label("Kısa aralıklar yaklaşık olabilir.", 12, colors.secondary, false));
     }
 
     private void showApps(List<Usage.App> apps, int selectedRange) {
         LinearLayout list = card();
-        TextView title = label("Mobil veri kullanımı", 18, colors.text, true);
-        title.setAccessibilityHeading(true);
-        list.addView(title);
         if (selectedRange < 2) paragraph(list, "Kısa aralıktaki uygulama değerleri yaklaşık olabilir.");
         if (apps.isEmpty()) {
             paragraph(list, "Bu aralıkta kaydedilmiş uygulama kullanımı yok.");
             return;
         }
-        addAppRows(list, apps, result -> {
+        addAppRows(list, apps, apps.size(), result -> {
             app = result;
             selectedBar = -1;
             render();
         });
     }
 
-    private void addAppRows(LinearLayout list, List<Usage.App> apps, Consumer<Usage.App> choose) {
-        long max = apps.get(0).bytes;
-        for (Usage.App result : apps) {
+    private void addAppRows(LinearLayout list, List<Usage.App> apps, int limit, Consumer<Usage.App> choose) {
+        double total = 0;
+        for (Usage.App app : apps) total += app.bytes;
+        list.addView(label("Toplam uygulama tüketimindeki pay", 12, colors.secondary, false));
+        for (Usage.App result : apps.subList(0, Math.min(limit, apps.size()))) {
             LinearLayout entry = column();
             entry.setPadding(dp(8), dp(11), dp(8), dp(11));
             entry.setBackground(interactive(colors.surface, 12, 0));
@@ -866,7 +869,19 @@ public final class Dashboard extends Activity {
             TextView name = label(result.name, 15, colors.text, true);
             name.setPadding(0, 0, dp(8), 0);
             top.addView(name, new LinearLayout.LayoutParams(0, -2, 1));
-            top.addView(label(Usage.format(result.bytes) + (choose == null ? "" : "  ›"), 14, colors.accent, true));
+            LinearLayout values = column();
+            values.setGravity(Gravity.END);
+            values.addView(label(Usage.format(result.bytes), 14, colors.text, true));
+            float fraction = total > 0 ? (float) (result.bytes / total) : 0;
+            int percent = Math.round(100 * fraction);
+            String share = fraction > 0 && fraction < 0.01f ? "<%1" : "%" + percent;
+            values.addView(label(share, 12, colors.secondary, false));
+            top.addView(values);
+            if (choose != null) {
+                LinearLayout.LayoutParams arrow = new LinearLayout.LayoutParams(dp(16), dp(16));
+                arrow.setMarginStart(dp(6));
+                top.addView(icon(R.drawable.ic_next, colors.secondary), arrow);
+            }
             entry.addView(top);
             LinearLayout bar = row();
             bar.setBackground(shape(colors.border, 5, 0));
@@ -877,7 +892,6 @@ public final class Dashboard extends Activity {
             entry.addView(bar, line);
             View mark = new View(this);
             mark.setBackground(shape(colors.accent, 5, 0));
-            float fraction = Math.max(0.01f, (float) result.bytes / max);
             bar.setWeightSum(1f);
             bar.addView(mark, new LinearLayout.LayoutParams(0, -1, fraction));
             list.addView(entry);
@@ -888,6 +902,8 @@ public final class Dashboard extends Activity {
         private final int token;
         private LinearLayout results;
         private TextView clock;
+        private TextView amount;
+        private TextView pace;
         private TextView status;
         private TextView toggle;
         private SessionMeter.State state;
@@ -902,28 +918,38 @@ public final class Dashboard extends Activity {
 
         void show() {
             LinearLayout banner = card();
-            setHeroStyle(banner, 0);
-            banner.addView(label("Veri Sayacı", 20, colors.text, true));
-            clock = label("00:00", 40, colors.accent, true);
+            banner.addView(label("Veri sayacı", 18, colors.text, true));
+            clock = label("00:00", 38, colors.text, true);
             clock.setFontFeatureSettings("tnum");
             banner.addView(clock);
+            amount = label("", 26, colors.accent, true);
+            amount.setFontFeatureSettings("tnum");
+            amount.setVisibility(View.GONE);
+            banner.addView(amount);
+            pace = label("", 14, colors.secondary, false);
+            pace.setVisibility(View.GONE);
+            banner.addView(pace);
             status = label("Sayaç verileri yükleniyor…", 13, colors.secondary, false);
             banner.addView(status);
+            LinearLayout actions = row();
+            actions.setPadding(0, dp(12), 0, 0);
             toggle = chip("Başlat", true, () -> {
                 if (SessionService.phase() == SessionService.IDLE) sessionMetric = SessionMeter.TOTAL;
                 SessionService.toggle(Dashboard.this);
                 updateControls();
             });
-            banner.addView(toggle, new LinearLayout.LayoutParams(-1, dp(48)));
+            toggle.setMinHeight(dp(48));
+            actions.addView(toggle, new LinearLayout.LayoutParams(0, -2, 1));
             if (historyId > 0) {
                 toggle.setVisibility(View.GONE);
-                banner.addView(action("Son ölçüme dön", () -> {
+                actions.addView(action("Son ölçüme dön", () -> {
                     historyId = 0;
                     sessionMetric = SessionMeter.TOTAL;
                     render();
-                }));
+                }), new LinearLayout.LayoutParams(0, -2, 1));
             }
-            banner.addView(action("Oturum geçmişi", this::openHistory));
+            actions.addView(action("Geçmiş", this::openHistory, true, "Oturum geçmişi"));
+            banner.addView(actions);
             results = column();
             content.addView(results);
             tick();
@@ -978,6 +1004,11 @@ public final class Dashboard extends Activity {
                 time = SystemClock.elapsedRealtime() - state.points.get(0).elapsed;
             }
             clock.setText(SessionMeter.duration(time));
+            amount.setVisibility(hasPoints ? View.VISIBLE : View.GONE);
+            if (hasPoints) amount.setText(Usage.format(state.amount(SessionMeter.TOTAL)));
+            long hourly = hasPoints ? state.hourlyEstimate() : -1;
+            pace.setVisibility(hourly >= 0 ? View.VISIBLE : View.GONE);
+            if (hourly >= 0) pace.setText("Bu hızla yaklaşık " + Usage.format(hourly) + "/saat");
             String error = SessionService.error();
             if (error != null) status.setText(error);
             else if (unavailable) status.setText("Sayaç kaydı okunamadı. Yenile’ye dokun.");
@@ -995,10 +1026,7 @@ public final class Dashboard extends Activity {
             if (state.points.isEmpty()) return;
 
             LinearLayout totals = sessionCard();
-            totals.addView(label(state.title.isEmpty() ? "Mobil veri toplamı" : state.title, 17, colors.text, true));
-            totals.addView(label(Usage.format(state.amount(SessionMeter.TOTAL)), 32, colors.accent, true));
-            long hourly = state.hourlyEstimate();
-            if (hourly >= 0) paragraph(totals, "Bu hızla yaklaşık " + Usage.format(hourly) + "/saat");
+            totals.addView(label(state.title.isEmpty() ? "Oturum ayrıntıları" : state.title, 17, colors.text, true));
             totals.addView(label("Hotspot · " + Usage.format(state.amount(Usage.HOTSPOT)), 16, colors.hotspot, true));
             ZoneId zone = ZoneId.systemDefault();
             String start = Instant.ofEpochMilli(state.points.get(0).wall).atZone(zone).format(SESSION_TIME);
@@ -1035,7 +1063,7 @@ public final class Dashboard extends Activity {
             LinearLayout breakdown = sessionCard();
             breakdown.addView(label("Uygulamalara göre", 18, colors.text, true));
             if (apps.isEmpty()) paragraph(breakdown, "Bu aralıkta henüz uygulama kullanımı raporlanmadı.");
-            else addAppRows(breakdown, apps, item -> {
+            else addAppRows(breakdown, apps, apps.size(), item -> {
                 sessionMetric = item.uid;
                 showResults();
                 results.post(() -> {
@@ -1256,7 +1284,6 @@ public final class Dashboard extends Activity {
                 }
             }
             int every = Math.max(1, (periods.size() + 4) / 5);
-            Shader barFill = new LinearGradient(0, top, 0, bottom, accent, withAlpha(accent, 85), Shader.TileMode.CLAMP);
             paint.setTextAlign(Paint.Align.CENTER);
             for (int i = 0; i < periods.size(); i++) {
                 Period period = periods.get(i);
@@ -1268,10 +1295,8 @@ public final class Dashboard extends Activity {
                 }
                 if (period.bytes >= 0) {
                     float bar = Math.max(dp(2), (bottom - top) * period.bytes / (float) Math.max(1, max));
-                    paint.setColor(period.bytes == 0 ? colors.border : accent);
-                    paint.setShader(period.bytes > 0 && i != chosen ? barFill : null);
+                    paint.setColor(i == chosen ? accent : period.bytes == 0 ? colors.border : withAlpha(accent, 170));
                     canvas.drawRoundRect(center - halfBar, bottom - bar, center + halfBar, bottom, dp(3), dp(3), paint);
-                    paint.setShader(null);
                 }
                 if (i % every == 0 || every == 1) {
                     paint.setColor(colors.secondary);
@@ -1387,11 +1412,37 @@ public final class Dashboard extends Activity {
         return action;
     }
 
+    private LinearLayout.LayoutParams touchTarget() {
+        return new LinearLayout.LayoutParams(dp(48), dp(48));
+    }
+
+    private ImageView icon(int resource, int tint) {
+        ImageView icon = new ImageView(this);
+        icon.setImageResource(resource);
+        icon.setImageTintList(ColorStateList.valueOf(tint));
+        icon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        return icon;
+    }
+
+    private ImageButton iconButton(int resource, String description, Runnable callback) {
+        ImageButton button = new ImageButton(this);
+        button.setImageResource(resource);
+        button.setImageTintList(new ColorStateList(
+                new int[][]{{-android.R.attr.state_enabled}, {}},
+                new int[]{withAlpha(colors.secondary, 95), colors.accent}));
+        button.setScaleType(ImageView.ScaleType.CENTER);
+        button.setPadding(0, 0, 0, 0);
+        button.setBackground(interactive(0, 12, 0));
+        button.setContentDescription(description);
+        button.setOnClickListener(view -> callback.run());
+        return button;
+    }
+
     private TextView chip(String label, boolean selected, Runnable callback) {
         TextView tab = label(label, 13, selected ? colors.onAccent : colors.secondary, true);
         tab.setPadding(dp(7), 0, dp(7), 0);
         tab.setGravity(Gravity.CENTER);
-        tab.setBackground(interactive(selected ? colors.accent : colors.surface, 12, selected ? 0 : colors.border));
+        tab.setBackground(interactive(selected ? colors.accent : 0, 10, 0));
         tab.setSelected(selected);
         tab.setOnClickListener(view -> callback.run());
         tab.setFocusable(true);

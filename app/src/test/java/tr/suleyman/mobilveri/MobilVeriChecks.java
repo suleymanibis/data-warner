@@ -145,6 +145,8 @@ public final class MobilVeriChecks {
 
     private static void checkSummarySelections(LocalDate date) {
         check(Dashboard.summaryTitle(0, false, 0, 0, date).equals("Bugünkü mobil veri"), "today title");
+        check(Dashboard.summaryTitle(0, false, 1, 0, date).equals("Son 30 gün · Mobil veri"), "daily chart span title");
+        check(Dashboard.summaryTitle(2, false, 2, 0, date).equals("Son 30 gün · Hotspot"), "weekly hotspot span title");
         check(Dashboard.summaryTitle(0, false, 0, 1, date).contains("19 Kasım"), "historical day title");
         check(Dashboard.summaryTitle(2, false, 0, 1, date).startsWith("İnternet paylaşımı"), "hotspot title");
         check(Dashboard.summaryTitle(1, true, 0, 1, date).equals("Seçilen aralıktaki toplam"),
