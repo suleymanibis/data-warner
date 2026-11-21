@@ -72,35 +72,50 @@ final class Usage {
     }
 
     static List<App> ranked(Context context, Map<Integer, Long> counts) {
+        return ranked(context, counts, true);
+    }
+
+    static List<App> rankedUserApps(Context context, Map<Integer, Long> counts) {
+        return ranked(context, counts, false);
+    }
+
+    private static List<App> ranked(Context context, Map<Integer, Long> counts, boolean includeSystem) {
         List<App> apps = new ArrayList<>();
         PackageManager pm = context.getPackageManager();
         counts.forEach((uid, bytes) -> {
-            if (bytes > 0 && !Thread.currentThread().isInterrupted()) apps.add(describe(pm, uid, bytes));
+            if (bytes > 0 && !Thread.currentThread().isInterrupted()) {
+                App app = describe(pm, uid, bytes, includeSystem);
+                if (app != null) apps.add(app);
+            }
         });
         apps.sort((first, second) -> Long.compare(second.bytes, first.bytes));
         return apps;
     }
 
-    private static App describe(PackageManager pm, int uid, long bytes) {
+    private static App describe(PackageManager pm, int uid, long bytes, boolean includeSystem) {
+        if (!includeSystem && uid < 0) return null;
         if (uid == HOTSPOT) return new App(uid, "İnternet paylaşımı", bytes);
         if (uid == -4) return new App(uid, "Kaldırılan uygulamalar", bytes);
         if (uid < 0) return new App(uid, "Diğer sistem trafiği", bytes);
         String[] packages = pm.getPackagesForUid(uid);
         if (packages == null || packages.length == 0) {
-            return new App(uid, uid == 1000 ? "Android sistemi" : "Uygulama kimliği " + uid, bytes);
+            return includeSystem ? new App(uid, uid == 1000 ? "Android sistemi" : "Uygulama kimliği " + uid, bytes) : null;
         }
         List<String> labels = new ArrayList<>();
         Drawable icon = null;
         for (String name : packages) {
             try {
                 ApplicationInfo info = pm.getApplicationInfo(name, 0);
+                int systemFlags = ApplicationInfo.FLAG_SYSTEM | ApplicationInfo.FLAG_UPDATED_SYSTEM_APP;
+                if (!includeSystem && (info.flags & systemFlags) != 0) continue;
                 String label = pm.getApplicationLabel(info).toString();
                 if (!labels.contains(label)) labels.add(label);
                 if (icon == null) icon = info.loadIcon(pm);
             } catch (PackageManager.NameNotFoundException ignored) {
-                if (!labels.contains(name)) labels.add(name);
+                if (includeSystem && !labels.contains(name)) labels.add(name);
             }
         }
+        if (labels.isEmpty()) return null;
         return new App(uid, uid == 1000 ? "Android sistemi" : String.join(" / ", labels), bytes, icon);
     }
 

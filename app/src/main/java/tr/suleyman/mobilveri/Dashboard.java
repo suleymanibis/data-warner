@@ -1,6 +1,7 @@
 package tr.suleyman.mobilveri;
 
 import android.Manifest;
+import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.DatePickerDialog;
@@ -23,6 +24,7 @@ import android.text.InputType;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.animation.PathInterpolator;
 import android.widget.FrameLayout;
 import android.widget.EditText;
 import android.widget.HorizontalScrollView;
@@ -60,6 +62,8 @@ public final class Dashboard extends Activity {
     private static final DateTimeFormatter SESSION_TIME = DateTimeFormatter.ofPattern("d MMM HH:mm:ss", Usage.TR);
 
     private final ExecutorService queries = Executors.newSingleThreadExecutor();
+    private final PathInterpolator easeOut = new PathInterpolator(0.2f, 0f, 0f, 1f);
+    private final PathInterpolator easeIn = new PathInterpolator(0.4f, 0f, 1f, 1f);
     private Future<?> request;
     private Appearance colors;
     private FrameLayout root;
@@ -171,7 +175,7 @@ public final class Dashboard extends Activity {
     }
 
     @Override public void onBackPressed() {
-        if (drawerOpen) {
+        if (drawer != null) {
             closeDrawer();
         } else if (tab == SESSION_TAB && historyId > 0) {
             historyId = 0;
@@ -191,6 +195,10 @@ public final class Dashboard extends Activity {
     }
 
     private void render() {
+        render(0);
+    }
+
+    private void render(int tabDirection) {
         if (request != null) request.cancel(true);
         int token = ++revision;
         root = new FrameLayout(this);
@@ -213,6 +221,7 @@ public final class Dashboard extends Activity {
         menu.addView(brand, logo);
         menu.setContentDescription("Ayarlar panelini aç");
         menu.setBackground(interactive(0, 12, 0));
+        addPressFeedback(menu);
         menu.setOnClickListener(view -> openDrawer());
         menu.setFocusable(true);
         settingsButton = menu;
@@ -223,13 +232,18 @@ public final class Dashboard extends Activity {
         header.addView(iconButton(R.drawable.ic_refresh, "Yenile", this::render), touchTarget());
         main.addView(header);
 
-        ScrollView scroll = new ScrollView(this);
+        ScrollView scroll = new UsageScrollView(this, colors.accent);
         scroll.setFillViewport(true);
         scroll.setVerticalScrollBarEnabled(false);
         content = column();
         content.setPadding(dp(16), dp(2), dp(16), dp(20));
         scroll.addView(content);
         main.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        if (tabDirection != 0 && ValueAnimator.areAnimatorsEnabled()) {
+            scroll.setAlpha(0.65f);
+            scroll.setTranslationX(dp(12) * tabDirection);
+            scroll.animate().alpha(1f).translationX(0).setDuration(210).setInterpolator(easeOut).start();
+        }
         if (drawerOpen) openDrawer();
         if (!Usage.allowed(this)) {
             LinearLayout permission = card();
@@ -307,8 +321,7 @@ public final class Dashboard extends Activity {
                 if (selectedTab == 1 && selectedApp == null) {
                     long start = now - RANGE_HOURS[selectedRange] * Usage.HOUR;
                     Map<Integer, Long> counts = Usage.apps(this, start, now);
-                    counts.remove(Usage.HOTSPOT);
-                    List<Usage.App> rows = Usage.ranked(this, counts);
+                    List<Usage.App> rows = Usage.rankedUserApps(this, counts);
                     updated(token, progress, () -> showApps(rows, selectedRange));
                     return;
                 }
@@ -460,6 +473,7 @@ public final class Dashboard extends Activity {
             view.setGravity(Gravity.CENTER);
             view.setMinimumHeight(dp(56));
             view.setBackground(interactive(0, 12, 0));
+            addPressFeedback(view);
             ImageView image = icon(icons[i], color);
             image.setPadding(dp(11), dp(4), dp(11), dp(4));
             if (selected) image.setBackground(shape(colors.iconBackground, 16, 0));
@@ -472,11 +486,12 @@ public final class Dashboard extends Activity {
             view.setSelected(selected);
             view.setFocusable(true);
             view.setOnClickListener(clicked -> {
+                int direction = tab == ALERT_TAB ? -1 : Integer.compare(target, tab);
                 if (tab != target || app != null) selectedBar = -1;
                 tab = target;
                 historyId = 0;
                 app = null;
-                render();
+                render(direction);
             });
             nav.addView(view, new LinearLayout.LayoutParams(0, -2, i == 1 ? 1.25f : 1f));
         }
@@ -515,14 +530,14 @@ public final class Dashboard extends Activity {
         TextView close = action("×", this::closeDrawer, true, "Ayarlar panelini kapat");
         heading.addView(close);
         settings.addView(heading);
-        settings.addView(drawerAction("Veri Sayacı ›", () -> {
-            closeDrawer();
+        settings.addView(drawerAction("Veri Sayacı ›", () -> closeDrawer(() -> {
+            int direction = Integer.compare(SESSION_TAB, tab);
             tab = SESSION_TAB;
             historyId = 0;
             app = null;
             selectedBar = -1;
-            render();
-        }));
+            render(direction);
+        })));
 
         drawerHeading(settings, "Bildirim Ayarları");
         boolean notifications = getSystemService(NotificationManager.class).areNotificationsEnabled();
@@ -564,11 +579,11 @@ public final class Dashboard extends Activity {
         main.setDescendantFocusability(LinearLayout.FOCUS_BLOCK_DESCENDANTS);
         root.addView(drawer, new FrameLayout.LayoutParams(-1, -1));
         close.requestFocus();
-        if (animate) {
+        if (animate && ValueAnimator.areAnimatorsEnabled()) {
             scrim.setAlpha(0);
             panel.setTranslationX(-dimensions.width);
-            scrim.animate().alpha(1).setDuration(180).start();
-            panel.animate().translationX(0).setDuration(220).start();
+            scrim.animate().alpha(1).setDuration(210).setInterpolator(easeOut).start();
+            panel.animate().translationX(0).setDuration(250).setInterpolator(easeOut).start();
         }
     }
 
@@ -619,12 +634,38 @@ public final class Dashboard extends Activity {
     }
 
     private void closeDrawer() {
-        if (drawer != null) root.removeView(drawer);
-        drawer = null;
+        closeDrawer(null);
+    }
+
+    private void closeDrawer(Runnable afterClose) {
+        if (drawer == null || !drawerOpen) return;
         drawerOpen = false;
-        main.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
-        main.setDescendantFocusability(LinearLayout.FOCUS_BEFORE_DESCENDANTS);
-        settingsButton.requestFocus();
+        FrameLayout closing = drawer;
+        View scrim = closing.getChildAt(0);
+        View panel = closing.getChildAt(1);
+        closing.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
+        View inputShield = new View(this);
+        inputShield.setElevation(panel.getElevation() + 1);
+        inputShield.setClickable(true);
+        closing.addView(inputShield, new FrameLayout.LayoutParams(-1, -1));
+        Runnable finish = () -> {
+            if (drawer != closing) return;
+            root.removeView(closing);
+            drawer = null;
+            main.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
+            main.setDescendantFocusability(LinearLayout.FOCUS_BEFORE_DESCENDANTS);
+            settingsButton.requestFocus();
+            if (afterClose != null) afterClose.run();
+        };
+        scrim.animate().cancel();
+        panel.animate().cancel();
+        if (!ValueAnimator.areAnimatorsEnabled()) {
+            finish.run();
+            return;
+        }
+        scrim.animate().alpha(0).setDuration(190).setInterpolator(easeIn).start();
+        panel.animate().translationX(-panel.getLayoutParams().width).setDuration(190)
+                .setInterpolator(easeIn).withEndAction(finish).start();
     }
 
     private void drawerHeading(LinearLayout parent, String text) {
@@ -840,9 +881,10 @@ public final class Dashboard extends Activity {
         LinearLayout list = card();
         if (selectedRange < 2) paragraph(list, "Kısa aralıktaki uygulama değerleri yaklaşık olabilir.");
         if (apps.isEmpty()) {
-            paragraph(list, "Bu aralıkta kaydedilmiş uygulama kullanımı yok.");
+            paragraph(list, "Bu aralıkta kullanıcı uygulaması trafiği bulunamadı.");
             return;
         }
+        list.addView(label("Sistem uygulamaları gizli", 12, colors.secondary, false));
         addAppRows(list, apps, apps.size(), result -> {
             app = result;
             selectedBar = -1;
@@ -867,6 +909,8 @@ public final class Dashboard extends Activity {
             badgeLayout.setMarginEnd(dp(10));
             top.addView(appIcon(result), badgeLayout);
             TextView name = label(result.name, 15, colors.text, true);
+            name.setMaxLines(2);
+            name.setEllipsize(android.text.TextUtils.TruncateAt.END);
             name.setPadding(0, 0, dp(8), 0);
             top.addView(name, new LinearLayout.LayoutParams(0, -2, 1));
             LinearLayout values = column();
@@ -1406,6 +1450,7 @@ public final class Dashboard extends Activity {
         action.setGravity(Gravity.CENTER);
         action.setContentDescription(description);
         action.setBackground(interactive(0x00000000, 10, 0));
+        addPressFeedback(action);
         action.setEnabled(enabled);
         action.setFocusable(enabled);
         action.setOnClickListener(view -> callback.run());
@@ -1433,6 +1478,7 @@ public final class Dashboard extends Activity {
         button.setScaleType(ImageView.ScaleType.CENTER);
         button.setPadding(0, 0, 0, 0);
         button.setBackground(interactive(0, 12, 0));
+        addPressFeedback(button);
         button.setContentDescription(description);
         button.setOnClickListener(view -> callback.run());
         return button;
@@ -1443,6 +1489,7 @@ public final class Dashboard extends Activity {
         tab.setPadding(dp(7), 0, dp(7), 0);
         tab.setGravity(Gravity.CENTER);
         tab.setBackground(interactive(selected ? colors.accent : 0, 10, 0));
+        addPressFeedback(tab);
         tab.setSelected(selected);
         tab.setOnClickListener(view -> callback.run());
         tab.setFocusable(true);
@@ -1460,6 +1507,10 @@ public final class Dashboard extends Activity {
     private RippleDrawable interactive(int fill, int radius, int stroke) {
         return new RippleDrawable(ColorStateList.valueOf(withAlpha(colors.accent, 52)),
                 shape(fill, radius, stroke), shape(colors.text, radius, 0));
+    }
+
+    private void addPressFeedback(View view) {
+        view.setStateListAnimator(android.animation.AnimatorInflater.loadStateListAnimator(this, R.animator.press_feedback));
     }
 
     private static int withAlpha(int color, int alpha) {
