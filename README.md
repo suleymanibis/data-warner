@@ -14,6 +14,10 @@ You can name and reopen past measurements. After one minute of measured data, th
 
 Android reports hotspot usage as a single total. Its per-app and hotspot records can lag during short sessions. Usage records are stored on the phone.
 
+In the plan settings, enter the difference between your carrier's usage and Android's to calibrate the current billing cycle. Android reports combined mobile data usage across SIMs because ordinary apps cannot access the subscriber IDs needed to query each SIM separately.
+
+In Notification Settings, choose every 6 or 12 hours or set a daily summary time. The home-screen widget follows the selected theme and has its own refresh button. Open About to read the privacy policy or export your session history and usage summaries as CSV or JSON.
+
 ## Build from source
 
 Open the repository in Android Studio or run `./gradlew :app:assembleDebug`. On Windows, use `.\gradlew.bat :app:assembleDebug`.

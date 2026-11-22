@@ -11,10 +11,18 @@ import java.math.BigDecimal;
 final class DataPlan {
     final long capacity;
     final int renewalDay;
+    final long offset;
+    final long offsetCycle;
 
     DataPlan(long capacity, int renewalDay) {
+        this(capacity, renewalDay, 0, Long.MIN_VALUE);
+    }
+
+    private DataPlan(long capacity, int renewalDay, long offset, long offsetCycle) {
         this.capacity = capacity;
         this.renewalDay = renewalDay;
+        this.offset = offset;
+        this.offsetCycle = offsetCycle;
     }
 
     static SharedPreferences prefs(Context context) {
@@ -22,7 +30,9 @@ final class DataPlan {
     }
 
     static DataPlan load(Context context) {
-        return new DataPlan(prefs(context).getLong("capacity", 0), prefs(context).getInt("day", 1));
+        SharedPreferences settings = prefs(context);
+        return new DataPlan(settings.getLong("capacity", 0), settings.getInt("day", 1),
+                settings.getLong("usage_offset", 0), settings.getLong("offset_cycle", Long.MIN_VALUE));
     }
 
     static DataPlan parse(String capacity, String day) {
@@ -37,11 +47,36 @@ final class DataPlan {
     }
 
     String gigabytes() {
-        return BigDecimal.valueOf(capacity, 9).stripTrailingZeros().toPlainString().replace('.', ',');
+        return decimal(capacity);
+    }
+
+    private static String decimal(long bytes) {
+        char separator = java.text.DecimalFormatSymbols.getInstance().getDecimalSeparator();
+        return BigDecimal.valueOf(bytes, 9).stripTrailingZeros().toPlainString().replace('.', separator);
+    }
+
+    String offsetGigabytes(LocalDate today) {
+        return decimal(offsetCycle == start(today).toEpochDay() ? offset : 0);
+    }
+
+    DataPlan calibrate(String adjustment, LocalDate today) {
+        String value = adjustment.trim();
+        if (value.isEmpty()) value = "0";
+        if (!value.matches("[+-]?[0-9]{1,4}([,.][0-9]{1,3})?")) throw new IllegalArgumentException();
+        long bytes = new BigDecimal(value.replace(',', '.')).movePointRight(9).longValueExact();
+        if (Math.abs(bytes) > 1000 * AlertRule.BYTES_PER_GB) throw new IllegalArgumentException();
+        return new DataPlan(capacity, renewalDay, bytes, start(today).toEpochDay());
+    }
+
+    long adjustedUsage(long used, LocalDate cycle) {
+        long adjustment = offsetCycle == cycle.toEpochDay() ? offset : 0;
+        if (adjustment > 0 && used > Long.MAX_VALUE - adjustment) return Long.MAX_VALUE;
+        return Math.max(0, used + adjustment);
     }
 
     void save(Context context) {
         prefs(context).edit().putLong("capacity", capacity).putInt("day", renewalDay)
+                .putLong("usage_offset", offset).putLong("offset_cycle", offsetCycle)
                 .remove("notified_key").remove("notified_level").apply();
     }
 
@@ -60,7 +95,7 @@ final class DataPlan {
         LocalDate start = start(today);
         LocalDate next = cutoff(YearMonth.from(start).plusMonths(1));
         long used = Usage.total(context, Usage.startOf(start, now.getZone()), now.toInstant().toEpochMilli());
-        return new Snapshot(start, next, ChronoUnit.DAYS.between(today, next), capacity, used);
+        return new Snapshot(start, next, ChronoUnit.DAYS.between(today, next), capacity, adjustedUsage(used, start));
     }
 
     static final class Snapshot {

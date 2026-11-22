@@ -166,4 +166,23 @@
     <string name="weekly">"Haftalık"</string>
     <string name="widget_plan_setup">"Paket takibini ayarla"</string>
     <string name="widget_today_prefix">"Bugün "</string>
+    <string name="about">"Hakkında"</string>
+    <string name="app_version">"Data Warner · Sürüm %1$s"</string>
+    <string name="source_code">"Kaynak kodu"</string>
+    <string name="privacy_policy">"Gizlilik politikası"</string>
+    <string name="privacy_body">"Data Warner, kullanım erişimi verdiğinde mobil veri istatistiklerini Android’den okur. Ölçüm geçmişi, paket ayarları ve uyarılarda kullanılan örnekler cihazda saklanır. Uygulama hesap, reklam ve analiz hizmeti içermez. Kullanım verilerini geliştiriciye göndermez. Ölçüm geçmişini uygulamadan veya tüm yerel verileri Android ayarlarından silebilirsin. Dışa aktarılan dosyalar seçtiğin konuma kaydedilir."</string>
+    <string name="plan_offset">"Kullanım düzeltmesi (GB)"</string>
+    <string name="plan_offset_help">"Operatörün gösterdiği kullanımdan Android kullanımını çıkar ve farkı gir. Negatif değer kullanımı azaltır. Düzeltme bir sonraki yenilemede sıfırlanır."</string>
+    <string name="plan_validation_with_offset">"0’dan büyük ve en fazla 1000 GB paket, 1–31 arası gün ve −1000 ile +1000 GB arası düzeltme gir."</string>
+    <string name="summary_schedule">"Kullanım özeti zamanlaması"</string>
+    <string name="summary_at">"Her gün %1$s"</string>
+    <string name="summary_every">"%1$d saatte bir"</string>
+    <string name="battery_settings">"Pil optimizasyonu"</string>
+    <string name="battery_unrestricted">"Muaf"</string>
+    <string name="battery_restricted">"Optimizasyon uygulanabilir"</string>
+    <string name="battery_help">"Bazı cihazlar arka plandaki ölçümleri ve bildirimleri geciktirir. Uyarılar geç geliyorsa Data Warner’ın pil ayarlarını kontrol et."</string>
+    <string name="export_data">"Verileri dışa aktar"</string>
+    <string name="export_description">"Ölçüm geçmişini, bugünkü ve son 30 günlük mobil veri özetlerini dosyaya kaydet."</string>
+    <string name="export_saved">"Dosya kaydedildi."</string>
+    <string name="export_failed">"Veriler dışa aktarılamadı."</string>
 </resources>

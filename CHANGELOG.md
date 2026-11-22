@@ -1,5 +1,12 @@
 # Data Warner changelog
 
+## v1.8
+
+- Add a positive or negative data plan adjustment that expires at the next renewal.
+- Let users choose usage summary frequency or a daily time and open system battery settings.
+- Add light and dark widget styling and a manual refresh action.
+- Add About, an in-app privacy policy, and CSV/JSON export for measurement history and usage summaries.
+
 ## v1.7
 
 - Harden notification channels, zero-capacity plans, and measurement recovery after clock changes or interruption.

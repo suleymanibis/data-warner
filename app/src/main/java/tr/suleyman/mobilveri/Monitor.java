@@ -116,7 +116,8 @@ public final class Monitor extends BroadcastReceiver {
     }
 
     private static void scheduleReport(Context context) {
-        long next = nextReport(ZonedDateTime.now());
+        SummarySchedule schedule = SummarySchedule.load(context);
+        long next = schedule.next(ZonedDateTime.now());
         AlarmManager alarms = context.getSystemService(AlarmManager.class);
         PendingIntent report = pending(context, REPORT, next, PendingIntent.FLAG_UPDATE_CURRENT);
         if (Build.VERSION.SDK_INT < 31 || alarms.canScheduleExactAlarms()) {
@@ -131,22 +132,22 @@ public final class Monitor extends BroadcastReceiver {
     }
 
     static long nextReport(ZonedDateTime now) {
-        long hour = (now.getHour() / 6 + 1) * 6L;
-        ZonedDateTime next = now.toLocalDate().atStartOfDay().plusHours(hour).atZone(now.getZone());
-        if (!next.isAfter(now)) next = next.toLocalDateTime().plusHours(6).atZone(now.getZone());
-        return next.toInstant().toEpochMilli();
+        return SummarySchedule.DEFAULT.next(now);
     }
 
     private static void report(Context context, long scheduled) {
         long now = System.currentTimeMillis();
-        if (scheduled == 0 || now - scheduled >= 6 * Usage.HOUR || now < scheduled) return;
+        SummarySchedule schedule = SummarySchedule.load(context);
+        if (scheduled <= 0 || now < scheduled
+                || schedule.next(Instant.ofEpochMilli(scheduled - 1).atZone(ZoneId.systemDefault())) != scheduled
+                || schedule.next(Instant.ofEpochMilli(scheduled).atZone(ZoneId.systemDefault())) <= now) return;
         SharedPreferences prefs = context.getSharedPreferences("monitor", Context.MODE_PRIVATE);
         if (prefs.getLong("last_report", 0) == scheduled) return;
         ZonedDateTime slot = Instant.ofEpochMilli(scheduled).atZone(ZoneId.systemDefault());
-        boolean midnight = slot.getHour() == 0;
-        long start = Usage.startOf(midnight ? slot.toLocalDate().minusDays(1) : slot.toLocalDate(), slot.getZone());
-        long bytes = Usage.total(context, start, midnight ? scheduled : now);
-        if (notify(context, 1, SUMMARY_CHANNEL, midnight ? context.getString(R.string.mobile_yesterday) : context.getString(R.string.mobile_today),
+        boolean yesterday = slot.getHour() == 0 && slot.getMinute() == 0;
+        long start = Usage.startOf(yesterday ? slot.toLocalDate().minusDays(1) : slot.toLocalDate(), slot.getZone());
+        long bytes = Usage.total(context, start, yesterday ? scheduled : now);
+        if (notify(context, 1, SUMMARY_CHANNEL, yesterday ? context.getString(R.string.mobile_yesterday) : context.getString(R.string.mobile_today),
                 Usage.format(bytes) + context.getString(R.string.report_hotspot))) {
             prefs.edit().putLong("last_report", scheduled).apply();
         }
@@ -300,7 +301,8 @@ public final class Monitor extends BroadcastReceiver {
         if (level == 0) return;
         SharedPreferences prefs = DataPlan.prefs(context);
         DataPlan latest = DataPlan.load(context);
-        if (latest.capacity != plan.capacity || latest.renewalDay != plan.renewalDay) return;
+        if (latest.capacity != plan.capacity || latest.renewalDay != plan.renewalDay
+                || latest.offset != plan.offset || latest.offsetCycle != plan.offsetCycle) return;
         String key = snapshot.start.toString();
         boolean sameCycle = key.equals(prefs.getString("notified_key", ""));
         if (sameCycle && level <= prefs.getInt("notified_level", 0)) return;

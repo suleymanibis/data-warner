@@ -14,10 +14,20 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
 
 public final class PlanWidget extends AppWidgetProvider {
+    private static final String REFRESH = "tr.suleyman.mobilveri.REFRESH_WIDGET";
     private static final ExecutorService WORK = Executors.newSingleThreadExecutor();
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("d MMM", java.util.Locale.getDefault());
 
     @Override public void onUpdate(Context context, AppWidgetManager manager, int[] ids) {
+        updateAsync(context);
+    }
+
+    @Override public void onReceive(Context context, Intent intent) {
+        if (REFRESH.equals(intent.getAction())) updateAsync(context);
+        else super.onReceive(context, intent);
+    }
+
+    private void updateAsync(Context context) {
         PendingResult result = goAsync();
         Context app = context.getApplicationContext();
         WORK.execute(() -> {
@@ -61,11 +71,21 @@ public final class PlanWidget extends AppWidgetProvider {
         }
         if (ids.length == 0) return;
         RemoteViews view = new RemoteViews(context.getPackageName(), R.layout.plan_widget);
+        boolean light = Appearance.useLight(Appearance.mode(context), context.getResources().getConfiguration().uiMode);
+        Appearance colors = new Appearance(light);
+        view.setInt(R.id.widget_root, "setBackgroundResource", light ? R.drawable.widget_panel_light : R.drawable.widget_panel);
+        view.setTextColor(R.id.widget_title, colors.text);
+        view.setTextColor(R.id.widget_today, colors.accent);
+        view.setTextColor(R.id.widget_plan, colors.secondary);
+        view.setInt(R.id.widget_refresh, "setColorFilter", colors.accent);
         view.setTextViewText(R.id.widget_today, today);
         view.setTextViewText(R.id.widget_plan, remaining);
         PendingIntent open = PendingIntent.getActivity(context, 5, new Intent(context, Dashboard.class)
                 .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP), PendingIntent.FLAG_IMMUTABLE);
         view.setOnClickPendingIntent(R.id.widget_root, open);
+        PendingIntent refresh = PendingIntent.getBroadcast(context, 6,
+                new Intent(context, PlanWidget.class).setAction(REFRESH), PendingIntent.FLAG_IMMUTABLE);
+        view.setOnClickPendingIntent(R.id.widget_refresh, refresh);
         manager.updateAppWidget(ids, view);
     }
 }

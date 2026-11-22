@@ -117,7 +117,8 @@ public final class Dashboard extends Activity {
         NONE(0, 0),
         NOTIFICATIONS(R.string.notifications_settings, R.drawable.ic_notification),
         APPEARANCE(R.string.appearance_settings, R.drawable.ic_appearance),
-        PLAN(R.string.data_plan_settings, R.drawable.ic_plan);
+        PLAN(R.string.data_plan_settings, R.drawable.ic_plan),
+        ABOUT(R.string.about, R.drawable.ic_info);
 
         final int title;
         final int icon;
@@ -933,6 +934,9 @@ public final class Dashboard extends Activity {
             case APPEARANCE:
                 settings.addAppearancePreferences();
                 break;
+            case ABOUT:
+                settings.addAboutPreferences();
+                break;
             case PLAN:
                 if (Usage.allowed(this)) {
                     if (settingsPlanPrepared) addPreparedPlanCard(readySettingsPlan);
@@ -988,6 +992,19 @@ public final class Dashboard extends Activity {
     @Override public void onRequestPermissionsResult(int code, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(code, permissions, results);
         if (code == 1) render();
+    }
+
+    void selectExport() {
+        new AlertDialog.Builder(this).setTitle(R.string.export_data)
+                .setItems(new String[]{"CSV", "JSON"}, (dialog, index) -> DataExport.chooseDestination(this, index == 1))
+                .setNegativeButton(R.string.cancel, null).show();
+    }
+
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (resultCode == RESULT_OK && data != null && data.getData() != null) {
+            DataExport.save(this, requestCode, data.getData());
+        }
     }
 
     private void openUsageSettings() {

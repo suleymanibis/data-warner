@@ -166,4 +166,23 @@
     <string name="weekly">"Weekly"</string>
     <string name="widget_plan_setup">"Set up plan tracking"</string>
     <string name="widget_today_prefix">"Today "</string>
+    <string name="about">"About"</string>
+    <string name="app_version">"Data Warner · Version %1$s"</string>
+    <string name="source_code">"Source code"</string>
+    <string name="privacy_policy">"Privacy policy"</string>
+    <string name="privacy_body">"Data Warner reads mobile usage from Android when you grant usage access. Measurement history, data plan settings and samples used for alerts are stored on this device. The app has no accounts, ads or analytics and sends no usage data to the developer. You can delete measurement history in the app or remove local data from Android settings. Exported files are stored at the location you choose."</string>
+    <string name="plan_offset">"Usage adjustment (GB)"</string>
+    <string name="plan_offset_help">"Enter the difference between your carrier’s usage and Android’s. Negative values reduce usage. The adjustment expires at the next renewal."</string>
+    <string name="plan_validation_with_offset">"Enter a plan above 0 and up to 1000 GB, a day from 1 to 31, and an adjustment from −1000 to +1000 GB."</string>
+    <string name="summary_schedule">"Usage summary schedule"</string>
+    <string name="summary_at">"Daily at %1$s"</string>
+    <string name="summary_every">"Every %1$d hours"</string>
+    <string name="battery_settings">"Battery optimization"</string>
+    <string name="battery_unrestricted">"Exempt"</string>
+    <string name="battery_restricted">"Optimization may apply"</string>
+    <string name="battery_help">"Some devices delay usage checks and notifications in the background. Review Data Warner’s battery settings if alerts arrive late."</string>
+    <string name="export_data">"Export data"</string>
+    <string name="export_description">"Save your measurement history and mobile usage summaries for today and the last 30 days."</string>
+    <string name="export_saved">"Export saved."</string>
+    <string name="export_failed">"Couldn't export the data."</string>
 </resources>

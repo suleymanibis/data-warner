@@ -21,8 +21,8 @@ android {
         applicationId = "tr.suleyman.mobilveri"
         minSdk = 30
         targetSdk = 36
-        versionCode = 13
-        versionName = "1.7"
+        versionCode = 14
+        versionName = "1.8"
     }
 
     if (releaseSigning.values.none { it.isNullOrBlank() }) {
