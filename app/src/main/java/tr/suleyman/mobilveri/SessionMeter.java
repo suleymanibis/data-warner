@@ -50,7 +50,7 @@ final class SessionMeter extends SQLiteOpenHelper {
         SQLiteDatabase db = getWritableDatabase();
         db.beginTransaction();
         try {
-            db.execSQL("UPDATE session SET active = 0 WHERE active = 1");
+            markInterrupted(db);
             ContentValues row = new ContentValues();
             row.put("active", 1);
             row.put("started", point.wall);
@@ -65,6 +65,14 @@ final class SessionMeter extends SQLiteOpenHelper {
 
     void record(long id, Point point) {
         insert(getWritableDatabase(), id, point);
+    }
+
+    void markInterrupted() {
+        markInterrupted(getWritableDatabase());
+    }
+
+    private void markInterrupted(SQLiteDatabase db) {
+        db.execSQL("UPDATE session SET active = 0 WHERE active = 1");
     }
 
     void end(long id, Point point) {

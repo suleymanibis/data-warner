@@ -16,6 +16,7 @@ import java.util.Map;
 
 public final class MobilVeriChecks {
     public static void main(String[] args) throws Exception {
+        java.util.Locale.setDefault(java.util.Locale.forLanguageTag("tr-TR"));
         ZoneId zone = ZoneId.of("Europe/Istanbul");
         LocalDate date = LocalDate.of(2026, 11, 20);
         for (int hour = 0; hour < 24; hour++) {
@@ -86,7 +87,6 @@ public final class MobilVeriChecks {
     private static void checkCustomAlert() {
         AlertRule custom = AlertRule.parse("1,25", "90");
         check(custom.bytes == 1_250_000_000L && custom.duration() == 90 * 60_000L, "custom alert values");
-        check(custom.limit().equals("1,25 GB / 90 dk"), "custom alert label");
         Monitor.Window window = new Monitor.Window(3_000_000_000L, custom);
         window.add(80 * 60_000L, 1_500_000_000L);
         window.add(92 * 60_000L, 1_000_000_000L);
@@ -148,12 +148,12 @@ public final class MobilVeriChecks {
     }
 
     private static void checkSummarySelections(LocalDate date) {
-        check(Dashboard.summaryTitle(0, false, 0, 0, date).equals("Bugünkü mobil veri"), "today title");
-        check(Dashboard.summaryTitle(0, false, 1, 0, date).equals("Son 30 gün · Mobil veri"), "daily chart span title");
-        check(Dashboard.summaryTitle(2, false, 2, 0, date).equals("Son 30 gün · Hotspot"), "weekly hotspot span title");
-        check(Dashboard.summaryTitle(0, false, 0, 1, date).contains("19 Kasım"), "historical day title");
-        check(Dashboard.summaryTitle(2, false, 0, 1, date).startsWith("İnternet paylaşımı"), "hotspot title");
-        check(Dashboard.summaryTitle(1, true, 0, 1, date).equals("Seçilen aralıktaki toplam"),
+        check(Dashboard.summaryTitle(0, false, 0, 0) == R.string.today_mobile, "today title");
+        check(Dashboard.summaryTitle(0, false, 1, 0) == R.string.last_30_mobile, "daily chart span title");
+        check(Dashboard.summaryTitle(2, false, 2, 0) == R.string.last_30_hotspot, "weekly hotspot span title");
+        check(Dashboard.summaryTitle(0, false, 0, 1) == R.string.mobile_data, "historical day title");
+        check(Dashboard.summaryTitle(2, false, 0, 1) == R.string.hotspot_tethering, "hotspot title");
+        check(Dashboard.summaryTitle(1, true, 0, 1) == R.string.selected_total,
                 "app detail title");
     }
 

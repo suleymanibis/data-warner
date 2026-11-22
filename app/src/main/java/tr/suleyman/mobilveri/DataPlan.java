@@ -81,6 +81,6 @@ final class DataPlan {
         long remaining() { return Math.max(0, capacity - used); }
         long perDay() { return remaining() / Math.max(1, days); }
         int level() { return used >= capacity * 95 / 100 ? 95 : used >= capacity * 80 / 100 ? 80 : 0; }
-        int percent() { return (int) Math.min(100L, used * 100L / capacity); }
+        int percent() { return capacity <= 0 ? 0 : (int) Math.min(100d, 100d * used / capacity); }
     }
 }

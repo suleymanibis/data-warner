@@ -1,5 +1,12 @@
 # Data Warner changelog
 
+## v1.7
+
+- Harden notification channels, zero-capacity plans, and measurement recovery after clock changes or interruption.
+- Support the Android back gesture at the main screen and keep the scroll position when refreshing the same page.
+- Separate meter, chart, settings, and shared controls from the main activity.
+- Add English and Turkish resources and use the device locale for dates and usage values.
+
 ## v1.6
 
 - Target Android 16 (API 36) and respect system bars, screen cutouts, and the keyboard.

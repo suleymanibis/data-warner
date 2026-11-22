@@ -146,8 +146,8 @@ public final class Monitor extends BroadcastReceiver {
         boolean midnight = slot.getHour() == 0;
         long start = Usage.startOf(midnight ? slot.toLocalDate().minusDays(1) : slot.toLocalDate(), slot.getZone());
         long bytes = Usage.total(context, start, midnight ? scheduled : now);
-        if (notify(context, 1, SUMMARY_CHANNEL, midnight ? "Dünün mobil veri kullanımı" : "Bugünkü mobil veri kullanımı",
-                Usage.format(bytes) + " • İnternet paylaşımı dahil")) {
+        if (notify(context, 1, SUMMARY_CHANNEL, midnight ? context.getString(R.string.mobile_yesterday) : context.getString(R.string.mobile_today),
+                Usage.format(bytes) + context.getString(R.string.report_hotspot))) {
             prefs.edit().putLong("last_report", scheduled).apply();
         }
     }
@@ -175,7 +175,7 @@ public final class Monitor extends BroadcastReceiver {
                 // Compare deltas independently to avoid adding transferred bytes twice.
                 android = Usage.total(context, 0, wall);
             } catch (RuntimeException unavailable) {
-                Log.d("MobilVeri", "Sistem sayacı geçici olarak kullanılamıyor", unavailable);
+                Log.d("MobilVeri", context.getString(R.string.counter_unavailable), unavailable);
             }
             Window live = new Window(mobile, rule);
             Window system = new Window(android, rule);
@@ -208,9 +208,9 @@ public final class Monitor extends BroadcastReceiver {
                     && prefs.getBoolean("high", false);
             boolean measured = live.lower > rule.bytes;
             if (!active && (measured || system.lower > rule.bytes)) {
-                String title = measured ? "Mobil veri sınırı aşıldı" : "Tahmini mobil veri sınırı aşıldı";
+                String title = measured ? context.getString(R.string.limit_exceeded) : context.getString(R.string.limit_estimated);
                 String amount = Usage.format(measured ? live.lower : system.lower);
-                String detail = " • Sınır " + rule.limit();
+                String detail = context.getString(R.string.limit_prefix) + rule.limit(context);
                 Intent openAlert = new Intent(context, Dashboard.class).setAction(OPEN_ALERT)
                         .putExtra(ALERT_END, wall).putExtra(ALERT_DURATION, rule.duration())
                         .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
@@ -267,11 +267,11 @@ public final class Monitor extends BroadcastReceiver {
     private static void channels(Context context) {
         NotificationManager manager = context.getSystemService(NotificationManager.class);
         manager.createNotificationChannel(new NotificationChannel(SUMMARY_CHANNEL,
-                "Günlük kullanım özeti", NotificationManager.IMPORTANCE_LOW));
+                context.getString(R.string.daily_summary), NotificationManager.IMPORTANCE_LOW));
         manager.createNotificationChannel(new NotificationChannel(ALERT_CHANNEL,
-                "Mobil veri sınırı uyarısı", NotificationManager.IMPORTANCE_DEFAULT));
+                context.getString(R.string.limit_warning), NotificationManager.IMPORTANCE_DEFAULT));
         manager.createNotificationChannel(new NotificationChannel(PLAN_CHANNEL,
-                "Aylık paket uyarısı", NotificationManager.IMPORTANCE_DEFAULT));
+                context.getString(R.string.monthly_alert), NotificationManager.IMPORTANCE_DEFAULT));
     }
 
     private static boolean notify(Context context, int id, String channel, String title, String body) {
@@ -280,10 +280,13 @@ public final class Monitor extends BroadcastReceiver {
 
     private static boolean notify(Context context, int id, String channel, String title, String body, Intent intent) {
         NotificationManager manager = context.getSystemService(NotificationManager.class);
-        if (!manager.areNotificationsEnabled()
-                || manager.getNotificationChannel(channel).getImportance() == NotificationManager.IMPORTANCE_NONE) {
-            return false;
+        if (channel == null || !manager.areNotificationsEnabled()) return false;
+        NotificationChannel registered = manager.getNotificationChannel(channel);
+        if (registered == null) {
+            channels(context);
+            registered = manager.getNotificationChannel(channel);
         }
+        if (registered == null || registered.getImportance() == NotificationManager.IMPORTANCE_NONE) return false;
         PendingIntent open = PendingIntent.getActivity(context, id, intent, FLAGS | PendingIntent.FLAG_UPDATE_CURRENT);
         Notification notification = new Notification.Builder(context, channel)
                 .setSmallIcon(R.drawable.ic_data).setContentTitle(title).setContentText(body)
@@ -301,8 +304,8 @@ public final class Monitor extends BroadcastReceiver {
         String key = snapshot.start.toString();
         boolean sameCycle = key.equals(prefs.getString("notified_key", ""));
         if (sameCycle && level <= prefs.getInt("notified_level", 0)) return;
-        if (notify(context, 4, PLAN_CHANNEL, "Mobil veri paketi %" + level + " eşiğini geçti",
-                "Kalan " + Usage.format(snapshot.remaining()))) {
+        if (notify(context, 4, PLAN_CHANNEL, context.getString(R.string.plan_percent_alert, level),
+                context.getString(R.string.remaining_prefix) + Usage.format(snapshot.remaining()))) {
             prefs.edit().putString("notified_key", key).putInt("notified_level", level).apply();
         }
     }

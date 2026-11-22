@@ -15,7 +15,7 @@ import java.util.concurrent.ExecutorService;
 
 public final class PlanWidget extends AppWidgetProvider {
     private static final ExecutorService WORK = Executors.newSingleThreadExecutor();
-    private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("d MMM", Usage.TR);
+    private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("d MMM", java.util.Locale.getDefault());
 
     @Override public void onUpdate(Context context, AppWidgetManager manager, int[] ids) {
         PendingResult result = goAsync();
@@ -40,19 +40,19 @@ public final class PlanWidget extends AppWidgetProvider {
         int[] ids = manager.getAppWidgetIds(provider);
         DataPlan plan = DataPlan.load(context);
         if (ids.length == 0 && (!alerts || plan.capacity == 0)) return;
-        String today = "Kullanım erişimi gerekli";
-        String remaining = plan.capacity == 0 ? "Paket takibini ayarla" : "Paket verisi okunamadı";
+        String today = context.getString(R.string.usage_required);
+        String remaining = plan.capacity == 0 ? context.getString(R.string.widget_plan_setup) : context.getString(R.string.plan_error);
         try {
             if (Usage.allowed(context)) {
                 ZonedDateTime now = ZonedDateTime.now();
                 long end = now.toInstant().toEpochMilli();
                 if (ids.length > 0) {
-                    today = "Bugün " + Usage.format(Usage.total(context,
+                    today = context.getString(R.string.widget_today_prefix) + Usage.format(Usage.total(context,
                             Usage.startOf(now.toLocalDate(), now.getZone()), end));
                 }
                 if (plan.capacity > 0) {
                     DataPlan.Snapshot snapshot = plan.read(context, now);
-                    remaining = "Kalan " + Usage.format(snapshot.remaining()) + " · " + snapshot.next.format(DATE);
+                    remaining = context.getString(R.string.remaining_prefix) + Usage.format(snapshot.remaining()) + " · " + snapshot.next.format(DATE);
                     if (alerts) Monitor.notifyPlan(context, plan, snapshot);
                 }
             }

@@ -5,7 +5,7 @@ import android.content.SharedPreferences;
 import android.content.res.Configuration;
 
 final class Appearance {
-    static final String[] LABELS = {"Sisteme göre", "Koyu mod", "Açık mod"};
+    static final int[] LABELS = {R.string.theme_system, R.string.theme_dark, R.string.theme_light};
     static final int SYSTEM = 0;
     static final int DARK = 1;
     static final int LIGHT = 2;

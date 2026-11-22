@@ -51,7 +51,8 @@ final class AlertRule {
         return BigDecimal.valueOf(bytes, 9).stripTrailingZeros().toPlainString().replace('.', ',');
     }
 
-    String limit() {
-        return gigabytes() + " GB / " + (minutes % 60 == 0 ? minutes / 60 + " saat" : minutes + " dk");
+    String limit(Context context) {
+        return minutes % 60 == 0 ? context.getString(R.string.rule_limit_hours, gigabytes(), minutes / 60)
+                : context.getString(R.string.rule_limit_minutes, gigabytes(), minutes);
     }
 }

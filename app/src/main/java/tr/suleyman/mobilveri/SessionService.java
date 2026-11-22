@@ -35,6 +35,9 @@ public final class SessionService extends Service {
     private final ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor();
     private long anchor;
     private long started;
+    private long startedWall;
+    private boolean wallTimeChanged;
+    private static final long MAX_CLOCK_DRIFT = 5_000L;
     private long sessionId;
 
     static int phase() { return phase; }
@@ -63,15 +66,15 @@ public final class SessionService extends Service {
             if (start) context.startForegroundService(command);
             else context.startService(command);
         } catch (RuntimeException failure) {
-            error = "Android sayaç komutunu başlatamadı.";
+            error = context.getString(R.string.meter_start_error);
             Log.w("DataWarner", error, failure);
             updatePhase(before);
         }
     }
 
     @Override public int onStartCommand(Intent command, int flags, int startId) {
-        if (command == null) {
-            stopSelf(startId);
+        if (command == null || command.getAction() == null) {
+            worker.execute(() -> finish(null, startId, false));
             return START_NOT_STICKY;
         }
         SessionMeter.Point point = new SessionMeter.Point(command.getLongExtra("elapsed", 0),
@@ -91,13 +94,13 @@ public final class SessionService extends Service {
 
     private void foreground() {
         NotificationManager manager = getSystemService(NotificationManager.class);
-        manager.createNotificationChannel(new NotificationChannel(CHANNEL, "Veri sayacı", NotificationManager.IMPORTANCE_LOW));
+        manager.createNotificationChannel(new NotificationChannel(CHANNEL, getString(R.string.meter_title), NotificationManager.IMPORTANCE_LOW));
         Intent open = new Intent(this, Dashboard.class).setAction(OPEN_SESSION)
                 .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         PendingIntent click = PendingIntent.getActivity(this, 3, open, PendingIntent.FLAG_IMMUTABLE);
         Notification notification = new Notification.Builder(this, CHANNEL)
-                .setSmallIcon(R.drawable.ic_data).setContentTitle("Veri sayacı çalışıyor")
-                .setContentText("Ölçümü görmek veya bitirmek için dokun.").setContentIntent(click)
+                .setSmallIcon(R.drawable.ic_data).setContentTitle(getString(R.string.meter_notification_title))
+                .setContentText(getString(R.string.meter_notification_body)).setContentIntent(click)
                 .setOngoing(true).setOnlyAlertOnce(true).build();
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(3, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
@@ -107,8 +110,10 @@ public final class SessionService extends Service {
     }
 
     private void begin(SessionMeter.Point point) {
-        anchor = Math.max(0, point.wall - 24 * Usage.HOUR);
+        if (sessionId != 0) return;
+        startedWall = point.wall;
         started = point.elapsed;
+        anchor = Math.max(0, startedWall - 24 * Usage.HOUR);
         try (SessionMeter meter = new SessionMeter(this)) {
             sessionId = meter.begin(withApps(point));
             updatePhase(RUNNING);
@@ -137,8 +142,14 @@ public final class SessionService extends Service {
 
     private void finish(SessionMeter.Point point, int startId, boolean reset) {
         try (SessionMeter meter = new SessionMeter(this)) {
-            meter.end(sessionId, withApps(point));
-            if (reset) meter.resetDisplay(sessionId);
+            if (sessionId == 0) {
+                meter.markInterrupted();
+            } else if (point != null) {
+                meter.end(sessionId, withApps(point));
+                if (reset) meter.resetDisplay(sessionId);
+            } else {
+                meter.markInterrupted();
+            }
             REVISION.incrementAndGet();
             stopForeground(STOP_FOREGROUND_REMOVE);
             stopSelf(startId);
@@ -148,17 +159,22 @@ public final class SessionService extends Service {
     }
 
     private SessionMeter.Point withApps(SessionMeter.Point point) {
+        long elapsed = Math.max(started, point.elapsed);
+        long estimatedWall = startedWall + (elapsed - started);
+        wallTimeChanged |= Math.abs(point.wall - estimatedWall) > MAX_CLOCK_DRIFT;
         Map<Integer, Long> counts = null;
         try {
-            if (point.wall > anchor && Usage.allowed(this)) counts = Usage.apps(this, anchor, point.wall);
+            if (!wallTimeChanged && point.wall > anchor && Usage.allowed(this)) {
+                counts = Usage.apps(this, anchor, point.wall);
+            }
         } catch (RuntimeException failure) {
             Log.w("DataWarner", "Android uygulama istatistiğini vermedi", failure);
         }
-        return new SessionMeter.Point(point.elapsed, point.wall, point.mobile, counts);
+        return new SessionMeter.Point(elapsed, estimatedWall, point.mobile, counts);
     }
 
     private void fail(RuntimeException failure) {
-        error = "Sayaç ölçüm kaydını tamamlayamadı.";
+        error = getString(R.string.meter_save_error);
         Log.e("DataWarner", error, failure);
         stopSelf();
     }

@@ -24,7 +24,6 @@ final class Usage {
     // Android 11's UID_TETHERING pseudo-UID represents all tethering.
     static final int HOTSPOT = -5;
     static final long HOUR = 3_600_000L;
-    static final Locale TR = Locale.forLanguageTag("tr-TR");
     private static final int MOBILE = ConnectivityManager.TYPE_MOBILE;
 
     static boolean allowed(Context context) {
@@ -108,9 +107,9 @@ final class Usage {
 
     static String format(long value) {
         if (value < 0) return "—";
-        if (value >= 1_000_000_000L) return String.format(TR, "%.2f GB", value / 1e9);
-        if (value >= 1_000_000L) return String.format(TR, "%.1f MB", value / 1e6);
-        if (value >= 1_000L) return String.format(TR, "%.1f KB", value / 1e3);
+        if (value >= 1_000_000_000L) return String.format(Locale.getDefault(), "%.2f GB", value / 1e9);
+        if (value >= 1_000_000L) return String.format(Locale.getDefault(), "%.1f MB", value / 1e6);
+        if (value >= 1_000L) return String.format(Locale.getDefault(), "%.1f KB", value / 1e3);
         return value + " B";
     }
 
