@@ -16,7 +16,10 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: gradle/actions/setup-gradle@v4
+      - uses: android-actions/setup-android@v4.0.4
       - name: Install Android SDK
         run: sdkmanager 'platforms;android-36' 'build-tools;35.0.0'
       - name: Run tests and build debug APK
         run: ./gradlew test assembleDebug assembleDebugAndroidTest
+      - name: Check release bundle
+        run: ./gradlew :app:bundleRelease
