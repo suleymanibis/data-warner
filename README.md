@@ -18,10 +18,12 @@ Android reports hotspot usage as a single total. Its per-app and hotspot records
 
 Open the repository in Android Studio or run `./gradlew :app:assembleDebug`. On Windows, use `.\gradlew.bat :app:assembleDebug`.
 
+For a signed, optimized Play Store bundle, set `DATA_WARNER_KEYSTORE` to the upload keystore path and set `DATA_WARNER_STORE_PASSWORD`, `DATA_WARNER_KEY_ALIAS`, and `DATA_WARNER_KEY_PASSWORD` in the environment. Run `./gradlew :app:bundleRelease` and look for the AAB in `app/build/outputs/bundle/release/`. Use `:app:assembleRelease` with the original APK signing key for a compatible GitHub APK update.
+
 For a standalone Windows build, install JDK 21, Android SDK Platform 36, and Android SDK Build-Tools 35.0.0, then run:
 
 ```powershell
 .\build.ps1 -Sdk 'C:\path\to\Android\Sdk' -Jdk 'C:\path\to\jdk-21'
 ```
 
-The script writes the APK to `build/Data-Warner.apk` and generates a local signing key on the first run. Use the same key for updates to your own build.
+Set `DATA_WARNER_STORE_PASSWORD` and `DATA_WARNER_KEY_PASSWORD` before running the script. The script writes the APK to `build/Data-Warner.apk` and creates a local signing key if the specified file is missing. Pass `-SigningKey` and `-SigningAlias` to use an existing key. Keep the same signing key for updates.

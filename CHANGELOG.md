@@ -1,4 +1,12 @@
-# Data Warner v1.5
+# Data Warner changelog
+
+## v1.6
+
+- Target Android 16 (API 36) and respect system bars, screen cutouts, and the keyboard.
+- Limit package visibility to apps with a launcher entry.
+- Add an exact-alarm settings shortcut and configure optimized Android App Bundle builds with environment-based signing.
+
+## Changes from v1.4 to v1.5
 
 This release collects the changes since v1.4. The signed APK supports Android 11 and later and can update v1.4 through v1.4.4 without uninstalling the app.
 

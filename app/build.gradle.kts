@@ -2,6 +2,17 @@ plugins {
     id("com.android.application") version "8.12.0"
 }
 
+val releaseSigningFields = mapOf(
+    "storeFile" to providers.environmentVariable("DATA_WARNER_KEYSTORE"),
+    "storePassword" to providers.environmentVariable("DATA_WARNER_STORE_PASSWORD"),
+    "keyAlias" to providers.environmentVariable("DATA_WARNER_KEY_ALIAS"),
+    "keyPassword" to providers.environmentVariable("DATA_WARNER_KEY_PASSWORD")
+)
+val releaseSigning = releaseSigningFields.mapValues { it.value.orNull }
+require(releaseSigning.values.all { it.isNullOrBlank() } || releaseSigning.values.none { it.isNullOrBlank() }) {
+    "Set all four DATA_WARNER signing environment variables for a signed release."
+}
+
 android {
     namespace = "tr.suleyman.mobilveri"
     compileSdk = 36
@@ -9,9 +20,27 @@ android {
     defaultConfig {
         applicationId = "tr.suleyman.mobilveri"
         minSdk = 30
-        targetSdk = 34
-        versionCode = 11
-        versionName = "1.5"
+        targetSdk = 36
+        versionCode = 12
+        versionName = "1.6"
+    }
+
+    if (releaseSigning.values.none { it.isNullOrBlank() }) {
+        signingConfigs.create("release") {
+            storeFile = rootProject.file(releaseSigning.getValue("storeFile")!!)
+            storePassword = releaseSigning.getValue("storePassword")
+            keyAlias = releaseSigning.getValue("keyAlias")
+            keyPassword = releaseSigning.getValue("keyPassword")
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            signingConfig = signingConfigs.findByName("release")
+        }
     }
 
     compileOptions {

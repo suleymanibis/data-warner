@@ -4,10 +4,14 @@ param(
     [string]$Platform = 'android-36',
     [string]$BuildTools = '35.0.0',
     [string]$Destination = (Join-Path $PSScriptRoot 'build\Data-Warner.apk'),
-    [string]$SigningKey = (Join-Path $PSScriptRoot 'build\mobil-veri.jks')
+    [string]$SigningKey = (Join-Path $PSScriptRoot 'build\mobil-veri.jks'),
+    [string]$SigningAlias = 'mobil-veri'
 )
 
 $ErrorActionPreference = 'Stop'
+if (!$env:DATA_WARNER_STORE_PASSWORD -or !$env:DATA_WARNER_KEY_PASSWORD) {
+    throw 'Set DATA_WARNER_STORE_PASSWORD and DATA_WARNER_KEY_PASSWORD before signing.'
+}
 $tools = Join-Path $Sdk "build-tools\$BuildTools"
 $jar = Join-Path $Sdk "platforms\$Platform\android.jar"
 $bin = Join-Path $Jdk 'bin'
@@ -26,6 +30,20 @@ $zipalign = Join-Path $tools 'zipalign.exe'
 $apksigner = Join-Path $tools 'apksigner.bat'
 $keytool = Join-Path $bin 'keytool.exe'
 $manifest = Join-Path $build 'AndroidManifest.xml'
+$gradleConfig = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'app\build.gradle.kts') -Raw
+[xml]$appManifest = Get-Content -LiteralPath (Join-Path $app 'AndroidManifest.xml') -Raw -Encoding utf8
+$androidNamespace = 'http://schemas.android.com/apk/res/android'
+$sdkElement = $appManifest.CreateElement('uses-sdk')
+foreach ($name in @('minSdk', 'targetSdk', 'versionCode', 'versionName')) {
+    $setting = [regex]::Match($gradleConfig, "(?m)^\s*$name\s*=\s*`"?([\d.]+)")
+    if (!$setting.Success) { throw "Missing Android setting $name in app/build.gradle.kts." }
+    if ($name.EndsWith('Sdk')) {
+        $sdkElement.SetAttribute("${name}Version", $androidNamespace, $setting.Groups[1].Value)
+    } else {
+        $appManifest.DocumentElement.SetAttribute($name, $androidNamespace, $setting.Groups[1].Value)
+    }
+}
+$appManifest.DocumentElement.PrependChild($sdkElement) | Out-Null
 
 function Invoke-Checked([string]$Program, [string[]]$Arguments) {
     & $Program @Arguments
@@ -33,7 +51,6 @@ function Invoke-Checked([string]$Program, [string[]]$Arguments) {
 }
 
 New-Item -ItemType Directory -Force $classes, $generated, $dex, (Split-Path $Destination -Parent), (Split-Path $SigningKey -Parent) | Out-Null
-[xml]$appManifest = Get-Content -LiteralPath (Join-Path $app 'AndroidManifest.xml') -Raw -Encoding utf8
 $appManifest.DocumentElement.SetAttribute('package', 'tr.suleyman.mobilveri')
 $appManifest.Save($manifest)
 Invoke-Checked $aapt2 @('compile', '--dir', (Join-Path $app 'res'), '-o', $resources)
@@ -46,8 +63,8 @@ Copy-Item -Force -LiteralPath $base -Destination $unsigned
 Invoke-Checked (Join-Path $bin 'jar.exe') @('uf', $unsigned, '-C', $dex, 'classes.dex')
 Invoke-Checked $zipalign @('-f', '4', $unsigned, $aligned)
 if (!(Test-Path -LiteralPath $SigningKey)) {
-    Invoke-Checked $keytool @('-genkeypair', '-keystore', $SigningKey, '-storepass', 'android', '-keypass', 'android', '-alias', 'mobil-veri', '-keyalg', 'RSA', '-keysize', '2048', '-validity', '10000', '-dname', 'CN=Mobil Veri Personal APK')
+    Invoke-Checked $keytool @('-genkeypair', '-storetype', 'JKS', '-keystore', $SigningKey, '-storepass:env', 'DATA_WARNER_STORE_PASSWORD', '-keypass:env', 'DATA_WARNER_KEY_PASSWORD', '-alias', $SigningAlias, '-keyalg', 'RSA', '-keysize', '2048', '-validity', '10000', '-dname', 'CN=Data Warner APK')
 }
-Invoke-Checked $apksigner @('sign', '--ks', $SigningKey, '--ks-key-alias', 'mobil-veri', '--ks-pass', 'pass:android', '--key-pass', 'pass:android', '--v4-signing-enabled', 'false', '--out', $Destination, $aligned)
+Invoke-Checked $apksigner @('sign', '--ks', $SigningKey, '--ks-key-alias', $SigningAlias, '--ks-pass', 'env:DATA_WARNER_STORE_PASSWORD', '--key-pass', 'env:DATA_WARNER_KEY_PASSWORD', '--v4-signing-enabled', 'false', '--out', $Destination, $aligned)
 Invoke-Checked $apksigner @('verify', '--verbose', $Destination)
 Invoke-Checked $aapt2 @('dump', 'badging', $Destination)

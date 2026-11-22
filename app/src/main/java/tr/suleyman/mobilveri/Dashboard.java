@@ -3,6 +3,7 @@ package tr.suleyman.mobilveri;
 import android.Manifest;
 import android.animation.ValueAnimator;
 import android.app.Activity;
+import android.app.AlarmManager;
 import android.app.AlertDialog;
 import android.app.DatePickerDialog;
 import android.app.NotificationChannel;
@@ -12,10 +13,13 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Insets;
 import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemClock;
@@ -24,6 +28,8 @@ import android.text.InputType;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.view.animation.PathInterpolator;
 import android.widget.FrameLayout;
 import android.widget.EditText;
@@ -130,6 +136,16 @@ public final class Dashboard extends Activity {
         colors = new Appearance(Appearance.useLight(Appearance.mode(this), getResources().getConfiguration().uiMode));
         setTheme(colors.light ? R.style.DataWarnerLight : R.style.DataWarnerDark);
         super.onCreate(saved);
+        getWindow().setDecorFitsSystemWindows(false);
+        getWindow().setStatusBarColor(Color.TRANSPARENT);
+        getWindow().setNavigationBarColor(Color.TRANSPARENT);
+        getWindow().setNavigationBarContrastEnforced(false);
+        WindowInsetsController bars = getWindow().getInsetsController();
+        if (bars != null) {
+            int mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                    | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+            bars.setSystemBarsAppearance(colors.light ? mask : 0, mask);
+        }
         if (saved != null) {
             tab = saved.getInt("tab");
             mode = saved.getInt("mode");
@@ -255,12 +271,20 @@ public final class Dashboard extends Activity {
         clearPendingSelection();
         tabPreviews.clear();
         root = new FrameLayout(this);
+        root.setBackgroundColor(colors.background);
+        root.setOnApplyWindowInsetsListener((view, insets) -> {
+            Insets safe = insets.getInsets(WindowInsets.Type.systemBars()
+                    | WindowInsets.Type.displayCutout() | WindowInsets.Type.ime());
+            view.setPadding(safe.left, safe.top, safe.right, safe.bottom);
+            return WindowInsets.CONSUMED;
+        });
         drawer = null;
         swipeLayout = null;
         main = column();
         main.setBackgroundColor(colors.background);
         root.addView(main, new FrameLayout.LayoutParams(-1, -1));
         setContentView(root);
+        root.requestApplyInsets();
         if (settingsPage != SettingsPage.NONE) {
             renderSettingsPage();
             PageMotion.animate(previousPage, pageFrame, direction, fullWidth, dp(28), easeOut);
@@ -911,7 +935,21 @@ public final class Dashboard extends Activity {
         addNotificationChannel(channels, "Günlük kullanım özeti", Monitor.SUMMARY_CHANNEL);
         addNotificationChannel(channels, "Veri sınırı bildirimi", Monitor.ALERT_CHANNEL);
         addNotificationChannel(channels, "Aylık paket uyarısı", Monitor.PLAN_CHANNEL);
+        if (Build.VERSION.SDK_INT >= 31 && !getSystemService(AlarmManager.class).canScheduleExactAlarms()) {
+            channels.addView(settingsLink("Kesin alarm izni", "Özet bildirimi zamanında gelsin", 0,
+                    this::openExactAlarmSettings));
+        }
         card().addView(settingsLink("Mobil veri sınırı", AlertRule.load(this).limit(), 0, this::editAlertRule));
+    }
+
+    private void openExactAlarmSettings() {
+        try {
+            startActivity(new Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                    Uri.fromParts("package", getPackageName(), null)));
+        } catch (ActivityNotFoundException | SecurityException unavailable) {
+            startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.fromParts("package", getPackageName(), null)));
+        }
     }
 
     private void addAppearancePreferences() {
