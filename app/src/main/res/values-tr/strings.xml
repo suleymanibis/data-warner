@@ -118,9 +118,7 @@
     <string name="plan_error_now">"Paket verisi şu anda okunamadı."</string>
     <string name="plan_input_help">"Paket boyutunu ve yenilenme gününü gir."</string>
     <string name="plan_loading">"Paket hesaplanıyor…"</string>
-    <string name="plan_percent" formatted="false">"Mobil veri paketi %"</string>
     <string name="plan_percent_alert">"Mobil veri paketi %%%1$d eşiğini geçti"</string>
-    <string name="plan_percent_suffix">" eşiğini geçti"</string>
     <string name="plan_remaining_suffix">" kaldı"</string>
     <string name="plan_renewal_day">"Yenilenme günü (1–31)"</string>
     <string name="plan_rule_help" formatted="false">"Kısa aylarda son gün kullanılır. Uyarı eşikleri %80 ve %95."</string>
@@ -129,7 +127,6 @@
     <string name="plan_title">"Mobil veri paketi"</string>
     <string name="plan_tracking">"Paket takibi"</string>
     <string name="plan_usage_required">"Paket tüketimini görmek için kullanım erişimi gerekir."</string>
-    <string name="plan_validation">"0’dan büyük, en fazla 1000 GB ve 1–31 arasında bir gün gir."</string>
     <string name="previous_chart_range">"Önceki grafik aralığı"</string>
     <string name="previous_day">"Önceki gün"</string>
     <string name="range_error">"Bu aralığın verileri okunamadı."</string>
@@ -185,4 +182,6 @@
     <string name="export_description">"Ölçüm geçmişini, bugünkü ve son 30 günlük mobil veri özetlerini dosyaya kaydet."</string>
     <string name="export_saved">"Dosya kaydedildi."</string>
     <string name="export_failed">"Veriler dışa aktarılamadı."</string>
+    <string name="share_below">&lt;%1$s</string>
+    <string name="plan_turn_off">Takibi kapat</string>
 </resources>

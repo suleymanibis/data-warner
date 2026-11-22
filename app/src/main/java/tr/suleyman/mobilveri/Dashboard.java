@@ -37,6 +37,8 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
+import java.text.NumberFormat;
+import java.util.Locale;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -56,10 +58,14 @@ public final class Dashboard extends Activity {
     private static final int[] MODES = {R.string.hourly, R.string.daily, R.string.weekly};
     private static final int[] RANGES = {R.string.one_hour, R.string.three_hours, R.string.one_day, R.string.three_days, R.string.one_week, R.string.one_month};
     private static final long[] RANGE_HOURS = {1, 3, 24, 72, 168, 720};
-    private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("d MMM", java.util.Locale.getDefault());
-    private static final DateTimeFormatter FULL_DATE = DateTimeFormatter.ofPattern("d MMMM, EEEE", java.util.Locale.getDefault());
-    private static final DateTimeFormatter CLOCK = DateTimeFormatter.ofPattern("HH:mm", java.util.Locale.getDefault());
-    static final DateTimeFormatter SESSION_TIME = DateTimeFormatter.ofPattern("d MMM HH:mm:ss", java.util.Locale.getDefault());
+    private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("d MMM", Locale.ROOT);
+    private static final DateTimeFormatter FULL_DATE = DateTimeFormatter.ofPattern("d MMMM, EEEE", Locale.ROOT);
+    private static final DateTimeFormatter CLOCK = DateTimeFormatter.ofPattern("HH:mm", Locale.ROOT);
+    private static final DateTimeFormatter SESSION_TIME = DateTimeFormatter.ofPattern("d MMM HH:mm:ss", Locale.ROOT);
+
+    static DateTimeFormatter sessionTime() {
+        return SESSION_TIME.withLocale(Locale.getDefault());
+    }
 
     final ExecutorService queries = Executors.newSingleThreadExecutor();
     private final ExecutorService usageQueries = Executors.newFixedThreadPool(2);
@@ -136,8 +142,10 @@ public final class Dashboard extends Activity {
         setTheme(colors.light ? R.style.DataWarnerLight : R.style.DataWarnerDark);
         super.onCreate(saved);
         getWindow().setDecorFitsSystemWindows(false);
-        getWindow().setStatusBarColor(Color.TRANSPARENT);
-        getWindow().setNavigationBarColor(Color.TRANSPARENT);
+        if (Build.VERSION.SDK_INT < 35) {
+            getWindow().setStatusBarColor(Color.TRANSPARENT);
+            getWindow().setNavigationBarColor(Color.TRANSPARENT);
+        }
         getWindow().setNavigationBarContrastEnforced(false);
         // Android 11 needs the decor view to exist before it can provide the controller.
         WindowInsetsController bars = getWindow().getDecorView().getWindowInsetsController();
@@ -158,6 +166,8 @@ public final class Dashboard extends Activity {
             alertEnd = saved.getLong("alertEnd");
             alertDuration = saved.getLong("alertDuration");
             drawerOpen = saved.getBoolean("drawerOpen");
+            renderedPage = saved.getString("renderedPage");
+            restoredScroll = saved.getInt("scrollY");
             settingsPage = SettingsPage.valueOf(saved.getString("settingsPage", SettingsPage.NONE.name()));
             if (saved.containsKey("app_uid")) {
                 app = new Usage.App(saved.getInt("app_uid"), saved.getString("app_name"), 0);
@@ -226,6 +236,8 @@ public final class Dashboard extends Activity {
         state.putLong("alertDuration", alertDuration);
         state.putBoolean("drawerOpen", drawerOpen);
         state.putString("settingsPage", settingsPage.name());
+        state.putString("renderedPage", renderedPage);
+        state.putInt("scrollY", currentScroll());
         if (app != null) {
             state.putInt("app_uid", app.uid);
             state.putString("app_name", app.name);
@@ -294,8 +306,7 @@ public final class Dashboard extends Activity {
         tabPreviews.clear();
         String page = settingsPage.name() + "/" + tab + "/" + historyOpen + "/" + historyId
                 + "/" + (app == null ? "" : app.uid) + "/" + mode + "/" + range + "/" + daysBack;
-        int oldScroll = pageScroll == null ? 0 : pageScroll.getScrollY();
-        restoredScroll = page.equals(renderedPage) ? oldScroll : 0;
+        restoredScroll = page.equals(renderedPage) ? currentScroll() : 0;
         renderedPage = page;
         updateBackCallback();
         if (root == null) {
@@ -399,15 +410,28 @@ public final class Dashboard extends Activity {
         main.addView(pageFrame, new LinearLayout.LayoutParams(-1, 0, 1));
     }
 
+    private int currentScroll() {
+        return restoredScroll > 0 || pageScroll == null ? restoredScroll : pageScroll.getScrollY();
+    }
+
     private void restoreScroll(ScrollView scroll) {
         pageScroll = scroll;
-        final int position = restoredScroll;
-        if (position > 0) scroll.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
+        if (restoredScroll > 0) scroll.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
             @Override public void onLayoutChange(View view, int l, int t, int r, int b,
                                                 int oldL, int oldT, int oldR, int oldB) {
+                if (pageScroll == scroll && restoredScroll > 0) {
+                    scroll.scrollTo(0, restoredScroll);
+                    if (scroll.getScrollY() < restoredScroll) return;
+                    restoredScroll = 0;
+                }
                 scroll.removeOnLayoutChangeListener(this);
-                scroll.scrollTo(0, position);
             }
+        });
+        scroll.setOnTouchListener((view, event) -> {
+            if (pageScroll == scroll && event.getActionMasked() == android.view.MotionEvent.ACTION_DOWN) {
+                restoredScroll = 0;
+            }
+            return false;
         });
     }
 
@@ -705,7 +729,7 @@ public final class Dashboard extends Activity {
         progress.setProgressTintList(ColorStateList.valueOf(value.level() > 0 ? colors.warning : colors.accent));
         progress.setProgress(value.percent());
         panel.addView(progress);
-        ui.paragraph(panel, getString(R.string.plan_details, Usage.format(value.capacity), value.next.format(DATE),
+        ui.paragraph(panel, getString(R.string.plan_details, Usage.format(value.capacity), value.next.format(DATE.withLocale(Locale.getDefault())),
                 value.days, Usage.format(value.perDay())));
     }
 
@@ -721,8 +745,8 @@ public final class Dashboard extends Activity {
         long end = alertEnd;
         long start = end - alertDuration;
         ZoneId zone = ZoneId.systemDefault();
-        ui.paragraph(card, Instant.ofEpochMilli(start).atZone(zone).format(SESSION_TIME) + " – "
-                + Instant.ofEpochMilli(end).atZone(zone).format(SESSION_TIME));
+        ui.paragraph(card, Instant.ofEpochMilli(start).atZone(zone).format(sessionTime()) + " – "
+                + Instant.ofEpochMilli(end).atZone(zone).format(sessionTime()));
         TextView detail = ui.label(getString(R.string.android_reading), 16, colors.text, true);
         card.addView(detail);
         request = queries.submit(() -> {
@@ -731,8 +755,8 @@ public final class Dashboard extends Activity {
                 long step = Math.max(60_000, (end - start + 11) / 12);
                 for (long time = start; time < end; time += step) {
                     long until = Math.min(end, time + step);
-                    String from = Instant.ofEpochMilli(time).atZone(zone).format(CLOCK);
-                    String to = Instant.ofEpochMilli(until).atZone(zone).format(CLOCK);
+                    String from = Instant.ofEpochMilli(time).atZone(zone).format(CLOCK.withLocale(Locale.getDefault()));
+                    String to = Instant.ofEpochMilli(until).atZone(zone).format(CLOCK.withLocale(Locale.getDefault()));
                     periods.add(new Period(time, until, from, from + "–" + to));
                 }
                 Long total = populatePeriods(periods, end, (a, b) -> Usage.total(this, a, b));
@@ -1048,7 +1072,7 @@ public final class Dashboard extends Activity {
         previous.setEnabled(daysBack < 29);
         dateRow.addView(previous, ui.touchTarget());
         LocalDate selected = today.minusDays(daysBack);
-        String dateLabel = daysBack == 0 ? getString(R.string.today) : selected.format(FULL_DATE);
+        String dateLabel = daysBack == 0 ? getString(R.string.today) : selected.format(FULL_DATE.withLocale(Locale.getDefault()));
         TextView day = ui.action(dateLabel, () -> {
             DatePickerDialog dialog = new DatePickerDialog(this, (view, year, month, dayOfMonth) -> {
                 LocalDate date = LocalDate.of(year, month + 1, dayOfMonth);
@@ -1111,7 +1135,7 @@ public final class Dashboard extends Activity {
         usage.removeAllViews();
         String title = getString(summaryTitle(selectedTab, selectedApp != null, mode, daysBack));
         String totalTitle = selectedApp == null && mode == 0 && daysBack > 0
-                ? title + " · " + snapshot.toLocalDate().minusDays(daysBack).format(FULL_DATE) : title;
+                ? title + " · " + snapshot.toLocalDate().minusDays(daysBack).format(FULL_DATE.withLocale(Locale.getDefault())) : title;
         TextView heading = ui.label(totalTitle, 14, colors.secondary, true);
         heading.setAccessibilityHeading(true);
         usage.addView(heading);
@@ -1167,6 +1191,7 @@ public final class Dashboard extends Activity {
     void addAppRows(LinearLayout list, List<Usage.App> apps, int limit, Consumer<Usage.App> choose) {
         double total = 0;
         for (Usage.App app : apps) total += app.bytes;
+        NumberFormat shareFormat = NumberFormat.getPercentInstance();
         list.addView(ui.label(getString(R.string.apps_share), 12, colors.secondary, false));
         for (Usage.App result : apps.subList(0, Math.min(limit, apps.size()))) {
             LinearLayout entry = ui.column();
@@ -1190,8 +1215,8 @@ public final class Dashboard extends Activity {
             values.setGravity(Gravity.END);
             values.addView(ui.label(Usage.format(result.bytes), 14, colors.text, true));
             float fraction = total > 0 ? (float) (result.bytes / total) : 0;
-            int percent = Math.round(100 * fraction);
-            String share = fraction > 0 && fraction < 0.01f ? "<%1" : "%" + percent;
+            String share = fraction > 0 && fraction < 0.01f
+                    ? getString(R.string.share_below, shareFormat.format(0.01)) : shareFormat.format(fraction);
             values.addView(ui.label(share, 12, colors.secondary, false));
             top.addView(values);
             if (choose != null) {
@@ -1352,7 +1377,7 @@ public final class Dashboard extends Activity {
         header.addView(ui.iconButton(R.drawable.ic_trash, getString(R.string.measurement_history_delete_all), () -> confirmDeleteHistory(0)), ui.touchTarget());
         ZoneId zone = ZoneId.systemDefault();
         for (SessionMeter.Entry entry : entries) {
-            String time = Instant.ofEpochMilli(entry.started).atZone(zone).format(SESSION_TIME);
+            String time = Instant.ofEpochMilli(entry.started).atZone(zone).format(sessionTime());
             LinearLayout item = ui.row();
             item.addView(settings.settingsLink(entry.title.isEmpty() ? getString(R.string.measurement) : entry.title, time, 0,
                     () -> openHistoryEntry(entry.id)), new LinearLayout.LayoutParams(0, -2, 1));
@@ -1445,8 +1470,8 @@ public final class Dashboard extends Activity {
             ZonedDateTime end = date.plusDays(1).atStartOfDay(zone);
             for (ZonedDateTime time = start; time.isBefore(end); time = time.plusHours(1)) {
                 periods.add(new Period(time.toInstant().toEpochMilli(), time.plusHours(1).toInstant().toEpochMilli(),
-                        time.format(CLOCK), time.format(DATE) + " · " + time.format(CLOCK)
-                                + "–" + time.plusHours(1).format(CLOCK)));
+                        time.format(CLOCK.withLocale(Locale.getDefault())), time.format(DATE.withLocale(Locale.getDefault())) + " · " + time.format(CLOCK.withLocale(Locale.getDefault()))
+                                + "–" + time.plusHours(1).format(CLOCK.withLocale(Locale.getDefault()))));
             }
         } else {
             LocalDate limit = today.plusDays(1);
@@ -1454,8 +1479,8 @@ public final class Dashboard extends Activity {
                 LocalDate next = mode == 1 ? date.plusDays(1) :
                         date.plusDays(8L - date.getDayOfWeek().getValue());
                 if (next.isAfter(limit)) next = limit;
-                String name = date.format(DATE);
-                String span = mode == 1 ? name : name + " – " + next.minusDays(1).format(DATE);
+                String name = date.format(DATE.withLocale(Locale.getDefault()));
+                String span = mode == 1 ? name : name + " – " + next.minusDays(1).format(DATE.withLocale(Locale.getDefault()));
                 periods.add(new Period(Usage.startOf(date, zone), Usage.startOf(next, zone),
                         mode == 1 ? Integer.toString(date.getDayOfMonth()) : name, span));
                 date = next;
@@ -1471,11 +1496,11 @@ public final class Dashboard extends Activity {
             long boundary = Math.min(end, cursor + step);
             ZonedDateTime date = Instant.ofEpochMilli(cursor).atZone(zone);
             ZonedDateTime until = Instant.ofEpochMilli(boundary).atZone(zone);
-            String time = date.format(CLOCK);
-            String last = until.toLocalDate().equals(date.toLocalDate()) ? until.format(CLOCK)
-                    : until.format(DATE) + " " + until.format(CLOCK);
-            periods.add(new Period(cursor, boundary, range <= 3 ? time : date.format(DATE),
-                    date.format(DATE) + " · " + time + "–" + last));
+            String time = date.format(CLOCK.withLocale(Locale.getDefault()));
+            String last = until.toLocalDate().equals(date.toLocalDate()) ? until.format(CLOCK.withLocale(Locale.getDefault()))
+                    : until.format(DATE.withLocale(Locale.getDefault())) + " " + until.format(CLOCK.withLocale(Locale.getDefault()));
+            periods.add(new Period(cursor, boundary, range <= 3 ? time : date.format(DATE.withLocale(Locale.getDefault())),
+                    date.format(DATE.withLocale(Locale.getDefault())) + " · " + time + "–" + last));
         }
         return periods;
     }

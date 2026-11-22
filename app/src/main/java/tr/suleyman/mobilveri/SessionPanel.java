@@ -177,8 +177,8 @@ final class SessionPanel {
         totals.addView(heading);
         totals.addView(ui.label(dashboard.getString(R.string.hotspot_prefix) + Usage.format(state.amount(Usage.HOTSPOT)), 16, colors.hotspot, true));
         ZoneId zone = ZoneId.systemDefault();
-        String start = Instant.ofEpochMilli(state.points.get(0).wall).atZone(zone).format(Dashboard.SESSION_TIME);
-        String end = Instant.ofEpochMilli(state.last().wall).atZone(zone).format(Dashboard.SESSION_TIME);
+        String start = Instant.ofEpochMilli(state.points.get(0).wall).atZone(zone).format(Dashboard.sessionTime());
+        String end = Instant.ofEpochMilli(state.last().wall).atZone(zone).format(Dashboard.sessionTime());
         ui.paragraph(totals, start + " – " + end);
 
         LinearLayout graph = sessionCard();

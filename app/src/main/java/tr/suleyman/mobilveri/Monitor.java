@@ -115,7 +115,8 @@ public final class Monitor extends BroadcastReceiver {
                 pending(context, SAMPLE, 0, PendingIntent.FLAG_UPDATE_CURRENT));
     }
 
-    private static void scheduleReport(Context context) {
+    private static synchronized void scheduleReport(Context context) {
+        cancel(context, REPORT);
         SummarySchedule schedule = SummarySchedule.load(context);
         long next = schedule.next(ZonedDateTime.now());
         AlarmManager alarms = context.getSystemService(AlarmManager.class);

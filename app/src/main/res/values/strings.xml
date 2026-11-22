@@ -118,9 +118,7 @@
     <string name="plan_error_now">"Couldn't read plan data right now."</string>
     <string name="plan_input_help">"Enter the plan size and renewal day."</string>
     <string name="plan_loading">"Calculating plan usage…"</string>
-    <string name="plan_percent">"Mobile data plan at "</string>
     <string name="plan_percent_alert">"Mobile data plan reached %1$d%%"</string>
-    <string name="plan_percent_suffix" formatted="false">"% used"</string>
     <string name="plan_remaining_suffix">" left"</string>
     <string name="plan_renewal_day">"Renewal day (1–31)"</string>
     <string name="plan_rule_help" formatted="false">"Short months use the last day. Alerts are sent at 80% and 95%."</string>
@@ -129,7 +127,6 @@
     <string name="plan_title">"Mobile data plan"</string>
     <string name="plan_tracking">"Plan tracking"</string>
     <string name="plan_usage_required">"Grant usage access to see plan usage."</string>
-    <string name="plan_validation">"Enter a size above 0 and up to 1000 GB, and a day between 1 and 31."</string>
     <string name="previous_chart_range">"Previous chart range"</string>
     <string name="previous_day">"Previous day"</string>
     <string name="range_error">"Couldn't read data for this range."</string>
@@ -185,4 +182,6 @@
     <string name="export_description">"Save your measurement history and mobile usage summaries for today and the last 30 days."</string>
     <string name="export_saved">"Export saved."</string>
     <string name="export_failed">"Couldn't export the data."</string>
+    <string name="share_below">&lt;%1$s</string>
+    <string name="plan_turn_off">Turn off</string>
 </resources>

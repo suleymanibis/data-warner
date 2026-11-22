@@ -16,7 +16,6 @@ import java.util.concurrent.ExecutorService;
 public final class PlanWidget extends AppWidgetProvider {
     private static final String REFRESH = "tr.suleyman.mobilveri.REFRESH_WIDGET";
     private static final ExecutorService WORK = Executors.newSingleThreadExecutor();
-    private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("d MMM", java.util.Locale.getDefault());
 
     @Override public void onUpdate(Context context, AppWidgetManager manager, int[] ids) {
         updateAsync(context);
@@ -62,7 +61,8 @@ public final class PlanWidget extends AppWidgetProvider {
                 }
                 if (plan.capacity > 0) {
                     DataPlan.Snapshot snapshot = plan.read(context, now);
-                    remaining = context.getString(R.string.remaining_prefix) + Usage.format(snapshot.remaining()) + " · " + snapshot.next.format(DATE);
+                    remaining = context.getString(R.string.remaining_prefix) + Usage.format(snapshot.remaining())
+                            + " · " + snapshot.next.format(DateTimeFormatter.ofPattern("d MMM"));
                     if (alerts) Monitor.notifyPlan(context, plan, snapshot);
                 }
             }

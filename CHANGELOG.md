@@ -1,5 +1,12 @@
 # Data Warner changelog
 
+## v1.9.2
+
+- Replace the previous alarm when rescheduling summaries and support more document providers when exporting.
+- Refresh localized dates and percentages, and format alert limits using the device locale.
+- Preserve scroll position across rotation and refresh the widget when its theme changes.
+- Clarify how to turn off plan tracking and expand export, notification schedule, and storage tests.
+
 ## v1.9.1
 
 - Fix a startup crash on Android 11 when initializing the appearance of the system bars.

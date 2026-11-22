@@ -17,20 +17,22 @@ import static org.junit.Assert.assertTrue;
 
 @RunWith(AndroidJUnit4.class)
 public final class SessionMeterStorageTest {
+    private static final String TEST_DATABASE = "sessions-instrumentation.db";
+    private static final String TEST_DISPLAY = "session_display_instrumentation";
     private Context context;
 
     @Before public void resetStorage() {
-        context = InstrumentationRegistry.getInstrumentation().getContext();
+        context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         clearTestStorage();
     }
 
     @After public void clearTestStorage() {
-        context.deleteDatabase("sessions.db");
-        context.getSharedPreferences("session_display", Context.MODE_PRIVATE).edit().clear().commit();
+        context.deleteDatabase(TEST_DATABASE);
+        context.getSharedPreferences(TEST_DISPLAY, Context.MODE_PRIVATE).edit().clear().commit();
     }
 
     @Test public void migratesExistingMeasurementFromVersionOne() {
-        try (SQLiteDatabase legacy = context.openOrCreateDatabase("sessions.db", Context.MODE_PRIVATE, null)) {
+        try (SQLiteDatabase legacy = context.openOrCreateDatabase(TEST_DATABASE, Context.MODE_PRIVATE, null)) {
             legacy.execSQL("CREATE TABLE session (id INTEGER PRIMARY KEY CHECK(id = 1), active INTEGER NOT NULL)");
             legacy.execSQL("CREATE TABLE point (elapsed INTEGER PRIMARY KEY, wall INTEGER NOT NULL,"
                     + " mobile INTEGER NOT NULL, apps TEXT)");
@@ -38,7 +40,7 @@ public final class SessionMeterStorageTest {
             legacy.execSQL("INSERT INTO point VALUES(1000, 51000, 50, NULL), (2000, 52000, 90, NULL)");
             legacy.setVersion(1);
         }
-        try (SessionMeter meter = new SessionMeter(context)) {
+        try (SessionMeter meter = new SessionMeter(context, TEST_DATABASE, TEST_DISPLAY)) {
             assertEquals(2, meter.getReadableDatabase().getVersion());
             SessionMeter.State session = meter.read(1);
             assertEquals(40, session.amount(SessionMeter.TOTAL));
@@ -49,7 +51,7 @@ public final class SessionMeterStorageTest {
     }
 
     @Test public void savesRenamesResetsAndDeletesSessions() {
-        try (SessionMeter meter = new SessionMeter(context)) {
+        try (SessionMeter meter = new SessionMeter(context, TEST_DATABASE, TEST_DISPLAY)) {
             long saved = meter.begin(point(0, 100));
             meter.record(saved, point(1500, 450));
             meter.end(saved, point(1000, 350));

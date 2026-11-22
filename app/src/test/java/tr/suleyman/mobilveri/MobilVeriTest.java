@@ -251,6 +251,60 @@ public final class MobilVeriTest {
         assertEquals(2, Instant.ofEpochMilli(daily.next(next)).atZone(zone).getHour());
     }
 
+
+    @Test public void intervalSummariesAdvanceAcrossNoonAndMidnight() {
+        ZonedDateTime start = LocalDate.of(2026, 11, 22).atStartOfDay(ZoneId.of("Europe/Istanbul"));
+        SummarySchedule six = new SummarySchedule(6, 0);
+        SummarySchedule twelve = new SummarySchedule(12, 0);
+        assertEquals(start.plusHours(6).toInstant().toEpochMilli(), six.next(start));
+        assertEquals(start.plusHours(18).toInstant().toEpochMilli(), six.next(start.plusHours(12)));
+        assertEquals(start.plusHours(12).toInstant().toEpochMilli(), twelve.next(start.plusHours(6)));
+        assertEquals(start.plusDays(1).toInstant().toEpochMilli(), twelve.next(start.plusHours(12)));
+    }
+
+    @Test public void exportCsvEscapesTitlesAndDefusesFormulas() {
+        for (String title : Arrays.asList("=1", "+1", "-1", "@SUM(A1)", " \t=1")) {
+            DataExport.Record row = new DataExport.Record("session", title, 10, 20, 30, -1);
+            assertTrue(DataExport.csv(Collections.singletonList(row))
+                    .endsWith("\"session\",\"'" + title + "\",10,20,30,-1\r\n"));
+        }
+        DataExport.Record row = new DataExport.Record("session", "A,\"B\"\nC", 10, 20, 30, -1);
+        assertEquals("type,title,start_ms,end_ms,mobile_bytes,hotspot_bytes\r\n"
+                + "\"session\",\"A,\"\"B\"\"\nC\",10,20,30,-1\r\n",
+                DataExport.csv(Collections.singletonList(row)));
+    }
+
+    @Test public void exportJsonPreservesTextAndNumericValues() throws org.json.JSONException {
+        String title = "=Veri \"ölçümü\"\n2";
+        DataExport.Record record = new DataExport.Record("session", title, 10, 20, 3_000_000_000L, -1);
+        org.json.JSONArray rows = new org.json.JSONArray(DataExport.json(Collections.singletonList(record)));
+        assertEquals(1, rows.length());
+        org.json.JSONObject row = rows.getJSONObject(0);
+        assertEquals("session", row.getString("type"));
+        assertEquals(title, row.getString("title"));
+        assertEquals(10, row.getLong("start_ms"));
+        assertEquals(20, row.getLong("end_ms"));
+        assertEquals(3_000_000_000L, row.getLong("mobile_bytes"));
+        assertEquals(-1, row.getLong("hotspot_bytes"));
+        assertEquals(0, new org.json.JSONArray(DataExport.json(Collections.emptyList())).length());
+    }
+
+    @Test public void alertLimitAndDatesFollowTheCurrentLocale() {
+        Locale before = Locale.getDefault();
+        try {
+            AlertRule rule = AlertRule.parse("1,25", "90");
+            ZonedDateTime time = LocalDate.of(2026, 11, 22).atStartOfDay(ZoneId.of("UTC"));
+            Locale.setDefault(Locale.US);
+            assertEquals("1.25", rule.gigabytes());
+            assertEquals("22 Nov 00:00:00", time.format(Dashboard.sessionTime()));
+            Locale.setDefault(Locale.forLanguageTag("tr-TR"));
+            assertEquals("1,25", rule.gigabytes());
+            assertEquals("22 Kas 00:00:00", time.format(Dashboard.sessionTime()));
+        } finally {
+            Locale.setDefault(before);
+        }
+    }
+
     private static long field(Object value, String name) throws Exception {
         Field field = value.getClass().getDeclaredField(name);
         field.setAccessible(true);

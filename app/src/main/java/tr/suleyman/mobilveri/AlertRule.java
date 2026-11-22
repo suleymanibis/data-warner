@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.SharedPreferences;
 
 import java.math.BigDecimal;
+import java.text.DecimalFormatSymbols;
 
 final class AlertRule {
     static final long BYTES_PER_GB = 1_000_000_000L;
@@ -48,7 +49,8 @@ final class AlertRule {
     }
 
     String gigabytes() {
-        return BigDecimal.valueOf(bytes, 9).stripTrailingZeros().toPlainString().replace('.', ',');
+        char separator = DecimalFormatSymbols.getInstance().getDecimalSeparator();
+        return BigDecimal.valueOf(bytes, 9).stripTrailingZeros().toPlainString().replace('.', separator);
     }
 
     String limit(Context context) {

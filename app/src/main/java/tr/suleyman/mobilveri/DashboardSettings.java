@@ -55,7 +55,8 @@ final class DashboardSettings {
         form.addView(inputs);
         AlertDialog dialog = new AlertDialog.Builder(activity).setTitle(activity.getString(R.string.plan_tracking)).setView(form)
                 .setNegativeButton(activity.getString(R.string.cancel), null).setPositiveButton(activity.getString(R.string.save), null)
-                .setNeutralButton(existing.capacity > 0 ? activity.getString(R.string.close) : null, (d, w) -> activity.savePlan(new DataPlan(0, 1))).create();
+                .setNeutralButton(existing.capacity > 0 ? activity.getString(R.string.plan_turn_off) : null,
+                        (d, w) -> activity.savePlan(new DataPlan(0, 1))).create();
         dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
             try {
                 DataPlan plan = DataPlan.parse(amount.getText().toString(), day.getText().toString())
@@ -193,6 +194,7 @@ final class DashboardSettings {
             View option = group.findViewById(id);
             if (option != null && (int) option.getTag() != mode) {
                 Appearance.setMode(activity, (int) option.getTag());
+                PlanWidget.requestUpdate(activity);
                 activity.recreate();
             }
         });

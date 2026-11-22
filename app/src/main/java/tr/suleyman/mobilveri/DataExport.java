@@ -2,6 +2,7 @@ package tr.suleyman.mobilveri;
 
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
+import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
@@ -15,6 +16,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.IOException;
+import java.io.FileNotFoundException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
@@ -52,8 +54,7 @@ final class DataExport {
             try {
                 List<Record> records = collect(app);
                 byte[] data = (request == JSON ? json(records) : csv(records)).getBytes(StandardCharsets.UTF_8);
-                try (OutputStream output = app.getContentResolver().openOutputStream(destination, "wt")) {
-                    if (output == null) throw new IOException("Export provider returned no output stream");
+                try (OutputStream output = openDestination(app.getContentResolver(), destination)) {
                     output.write(data);
                 }
             } catch (IOException | JSONException | RuntimeException failure) {
@@ -63,6 +64,18 @@ final class DataExport {
             final int result = message;
             new Handler(Looper.getMainLooper()).post(() -> Toast.makeText(app, result, Toast.LENGTH_LONG).show());
         });
+    }
+
+    private static OutputStream openDestination(ContentResolver resolver, Uri destination) throws IOException {
+        try {
+            OutputStream output = resolver.openOutputStream(destination, "wt");
+            if (output != null) return output;
+        } catch (FileNotFoundException | IllegalArgumentException | UnsupportedOperationException unsupported) {
+            // Some document providers only accept the basic write mode.
+        }
+        OutputStream output = resolver.openOutputStream(destination, "w");
+        if (output == null) throw new IOException("Export provider returned no output stream");
+        return output;
     }
 
     private static List<Record> collect(Context app) {
@@ -90,7 +103,7 @@ final class DataExport {
                 Usage.apps(app, start, end).getOrDefault(Usage.HOTSPOT, -1L)));
     }
 
-    private static String json(List<Record> records) throws JSONException {
+    static String json(List<Record> records) throws JSONException {
         JSONArray rows = new JSONArray();
         for (Record record : records) {
             JSONObject row = new JSONObject();
@@ -102,7 +115,7 @@ final class DataExport {
         return rows.toString(2) + "\n";
     }
 
-    private static String csv(List<Record> records) {
+    static String csv(List<Record> records) {
         StringBuilder csv = new StringBuilder(String.join(",", FIELDS)).append("\r\n");
         for (Record record : records) {
             String delimiter = "";
@@ -122,7 +135,7 @@ final class DataExport {
         return csv.toString();
     }
 
-    private static final class Record {
+    static final class Record {
         final Object[] values;
 
         Record(String type, String title, long start, long end, long mobile, long hotspot) {

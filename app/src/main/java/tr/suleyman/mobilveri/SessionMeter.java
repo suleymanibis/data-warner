@@ -21,8 +21,12 @@ final class SessionMeter extends SQLiteOpenHelper {
     private final android.content.SharedPreferences display;
 
     SessionMeter(Context context) {
-        super(context, "sessions.db", null, 2);
-        display = context.getSharedPreferences("session_display", Context.MODE_PRIVATE);
+        this(context, "sessions.db", "session_display");
+    }
+
+    SessionMeter(Context context, String database, String displayPreferences) {
+        super(context, database, null, 2);
+        display = context.getSharedPreferences(displayPreferences, Context.MODE_PRIVATE);
     }
 
     @Override public void onCreate(SQLiteDatabase db) {
