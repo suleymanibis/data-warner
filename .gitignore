@@ -8,3 +8,4 @@ build/
 *.keystore
 *.p12
 /local.properties
+/Data-Warner-Play-Store.zip

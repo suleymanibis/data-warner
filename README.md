@@ -31,3 +31,7 @@ For a standalone Windows build, install JDK 21, Android SDK Platform 36, and And
 ```
 
 Set `DATA_WARNER_STORE_PASSWORD` and `DATA_WARNER_KEY_PASSWORD` before running the script. The script writes the APK to `build/Data-Warner.apk` and creates a local signing key if the specified file is missing. Pass `-SigningKey` and `-SigningAlias` to use an existing key. Keep the same signing key for updates.
+
+## Tests
+
+Run `./gradlew test assembleDebug` for the JVM tests and debug build. With an Android 11 or later emulator or test device connected, run `./gradlew connectedDebugAndroidTest` for SQLite migration and history tests. GitHub Actions runs the JVM tests and builds both debug APKs on pushes and pull requests.

@@ -1,5 +1,11 @@
 # Data Warner changelog
 
+## v1.9
+
+- Run Java regression checks with JUnit, with additional coverage for data plans, usage formatting, and notification timing.
+- Add device tests for SQLite session migration and storage operations.
+- Add GitHub Actions checks and the MIT license.
+
 ## v1.8
 
 - Add a positive or negative data plan adjustment that expires at the next renewal.

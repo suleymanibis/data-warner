@@ -2,6 +2,13 @@ package tr.suleyman.mobilveri;
 
 import android.content.res.Configuration;
 
+import org.junit.Test;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
+
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.time.Instant;
@@ -13,10 +20,10 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Locale;
 
-public final class MobilVeriChecks {
-    public static void main(String[] args) throws Exception {
-        java.util.Locale.setDefault(java.util.Locale.forLanguageTag("tr-TR"));
+public final class MobilVeriTest {
+    @Test public void schedulesDefaultSummaryEverySixHours() {
         ZoneId zone = ZoneId.of("Europe/Istanbul");
         LocalDate date = LocalDate.of(2026, 11, 20);
         for (int hour = 0; hour < 24; hour++) {
@@ -26,6 +33,11 @@ public final class MobilVeriChecks {
                     && next.getMinute() == 0 && now.until(next, java.time.temporal.ChronoUnit.HOURS) < 6,
                     "notification slot " + hour);
         }
+    }
+
+    @Test public void chartBucketsCoverTheRequestedPeriod() throws Exception {
+        ZoneId zone = ZoneId.of("Europe/Istanbul");
+        LocalDate date = LocalDate.of(2026, 11, 20);
         Method periods = Dashboard.class.getDeclaredMethod("periods", LocalDate.class, ZoneId.class, int.class, int.class);
         periods.setAccessible(true);
         for (int mode = 0; mode < 3; mode++) {
@@ -41,28 +53,24 @@ public final class MobilVeriChecks {
                 check(field(buckets.get(i - 1), "end") == field(buckets.get(i), "start"), "contiguous chart buckets");
             }
         }
+    }
+
+    @Test public void counterHandlesResetAndMissingBaseline() throws Exception {
         Method delta = Monitor.class.getDeclaredMethod("delta", long.class, long.class);
         delta.setAccessible(true);
         check((Long) delta.invoke(null, 3_200_000_000L, 100_000_000L) == 3_100_000_000L, "rollover-safe threshold arithmetic");
         check((Long) delta.invoke(null, 44L, 88L) == -1L, "counter restart");
         check((Long) delta.invoke(null, 44L, -1L) == -1L, "unsupported baseline");
-        check(Usage.format(3_000_000_000L).equals("3,00 GB"), "Turkish units");
-        checkActiveBucketAttribution();
-        checkRollingWindowBounds();
-        checkSummarySelections(date);
-        checkAppearance();
-        checkSessionData();
-        checkCustomAlert();
-        checkDataPlan();
-        checkSessionRate();
+    }
+
+    @Test public void detectsHorizontalSwipes() {
         check(TabSwipeLayout.direction(-80, 10, 56) == 1, "left swipe opens next tab");
         check(TabSwipeLayout.direction(80, -10, 56) == -1, "right swipe opens previous tab");
         check(TabSwipeLayout.direction(25, 0, 56) == 0, "short drag does not change tabs");
         check(TabSwipeLayout.direction(60, 80, 56) == 0, "vertical scroll does not change tabs");
-        System.out.println("Schedule, chart periods, counter, formatting and swipe checks passed.");
     }
 
-    private static void checkDataPlan() {
+    @Test public void checkDataPlan() {
         DataPlan plan = DataPlan.parse("12,5", "31");
         check(plan.capacity == 12_500_000_000L, "decimal data plan size");
         check(plan.start(LocalDate.of(2027, 2, 27)).equals(LocalDate.of(2027, 1, 31)),
@@ -77,14 +85,14 @@ public final class MobilVeriChecks {
         check(new DataPlan.Snapshot(start, start.plusMonths(1), 1, 1000, 1100).remaining() == 0, "exhausted plan");
     }
 
-    private static void checkSessionRate() {
+    @Test public void checkSessionRate() {
         SessionMeter.State state = new SessionMeter.State(java.util.Arrays.asList(
                 new SessionMeter.Point(1000, 1000, 0, null),
                 new SessionMeter.Point(301000, 301000, 250_000_000L, null)), false);
         check(state.hourlyEstimate() == 3_000_000_000L, "250 MB in five minutes projects to 3 GB/hour");
     }
 
-    private static void checkCustomAlert() {
+    @Test public void checkCustomAlert() {
         AlertRule custom = AlertRule.parse("1,25", "90");
         check(custom.bytes == 1_250_000_000L && custom.duration() == 90 * 60_000L, "custom alert values");
         Monitor.Window window = new Monitor.Window(3_000_000_000L, custom);
@@ -100,7 +108,7 @@ public final class MobilVeriChecks {
         }
     }
 
-    private static void checkSessionData() {
+    @Test public void checkSessionData() {
         int app = 10123;
         Map<Integer, Long> baseline = new HashMap<>();
         baseline.put(app, 10L);
@@ -128,7 +136,7 @@ public final class MobilVeriChecks {
                 "longer session adapts chart intervals without changing the total");
     }
 
-    private static void checkActiveBucketAttribution() {
+    @Test public void checkActiveBucketAttribution() {
         List<Dashboard.Period> buckets = Arrays.asList(
                 new Dashboard.Period(0, 60, "0", "0"),
                 new Dashboard.Period(60, 120, "1", "1"),
@@ -147,7 +155,7 @@ public final class MobilVeriChecks {
         check(Dashboard.availableBar(buckets, -1) == -1, "selection can return to the overall summary");
     }
 
-    private static void checkSummarySelections(LocalDate date) {
+    @Test public void checkSummarySelections() {
         check(Dashboard.summaryTitle(0, false, 0, 0) == R.string.today_mobile, "today title");
         check(Dashboard.summaryTitle(0, false, 1, 0) == R.string.last_30_mobile, "daily chart span title");
         check(Dashboard.summaryTitle(2, false, 2, 0) == R.string.last_30_hotspot, "weekly hotspot span title");
@@ -157,7 +165,7 @@ public final class MobilVeriChecks {
                 "app detail title");
     }
 
-    private static void checkAppearance() {
+    @Test public void checkAppearance() {
         int night = Configuration.UI_MODE_NIGHT_YES;
         int day = Configuration.UI_MODE_NIGHT_NO;
         check(Appearance.useLight(Appearance.SYSTEM, day), "follow system light");
@@ -166,7 +174,7 @@ public final class MobilVeriChecks {
         check(!Appearance.useLight(Appearance.DARK, day), "force dark in a light system");
     }
 
-    private static void checkRollingWindowBounds() {
+    @Test public void checkRollingWindowBounds() {
         Monitor.Window rolling = new Monitor.Window(5_500_000_000L);
         rolling.add(30 * 60_000L, 2_400_000_000L);
         rolling.add(50 * 60_000L, 2_300_000_000L);
@@ -186,6 +194,63 @@ public final class MobilVeriChecks {
         check(reset.lower == 500_000_000L, "older sample cannot create a false alert across a counter reset");
     }
 
+
+    @Test public void percentHandlesInvalidCapacityAndCapsOverage() {
+        LocalDate start = LocalDate.of(2026, 11, 1);
+        LocalDate end = start.plusMonths(1);
+        assertEquals(0, new DataPlan.Snapshot(start, end, 0, 0, 300).percent());
+        assertEquals(0, new DataPlan.Snapshot(start, end, 0, -1, 300).percent());
+        assertEquals(79, new DataPlan.Snapshot(start, end, 1, 1000, 799).percent());
+        assertEquals(100, new DataPlan.Snapshot(start, end, 1, 1000, Long.MAX_VALUE).percent());
+    }
+
+    @Test public void calibrationAppliesOnlyToTheCurrentCycle() {
+        LocalDate today = LocalDate.of(2026, 11, 20);
+        DataPlan plan = DataPlan.parse("10", "15").calibrate("-0,75", today);
+        assertEquals(1_250_000_000L, plan.adjustedUsage(2_000_000_000L, today.withDayOfMonth(15)));
+        assertEquals(0, plan.adjustedUsage(700_000_000L, today.withDayOfMonth(15)));
+        assertEquals(2_000_000_000L, plan.adjustedUsage(2_000_000_000L, today.plusMonths(1).withDayOfMonth(15)));
+        assertThrows(IllegalArgumentException.class, () -> plan.calibrate("1001", today));
+    }
+
+    @Test public void exactThresholdAndMissingValuesRearmRollingAlert() {
+        Monitor.Window exact = new Monitor.Window(4_000_000_000L);
+        exact.add(Usage.HOUR, -1);
+        assertFalse(exact.belowLimit());
+        exact.add(Usage.HOUR, 1_000_000_000L);
+        assertEquals(3_000_000_000L, exact.lower);
+        assertEquals(3_000_000_000L, exact.upper);
+        assertTrue(exact.belowLimit());
+        assertTrue(new Monitor.Window(-1).belowLimit());
+    }
+
+    @Test public void formatUsesLocaleAndUnitThresholds() {
+        Locale before = Locale.getDefault();
+        try {
+            Locale.setDefault(Locale.US);
+            assertEquals("—", Usage.format(-1));
+            assertEquals("0 B", Usage.format(0));
+            assertEquals("999 B", Usage.format(999));
+            assertEquals("1.0 KB", Usage.format(1_000));
+            assertEquals("1.0 MB", Usage.format(1_000_000));
+            assertEquals("1.00 GB", Usage.format(1_000_000_000));
+            Locale.setDefault(Locale.forLanguageTag("tr-TR"));
+            assertEquals("3,00 GB", Usage.format(3_000_000_000L));
+        } finally {
+            Locale.setDefault(before);
+        }
+    }
+
+    @Test public void dailyScheduleHandlesDaylightSavingTransitions() {
+        ZoneId zone = ZoneId.of("Europe/Berlin");
+        SummarySchedule daily = new SummarySchedule(24, 2 * 60 + 30);
+        ZonedDateTime beforeGap = LocalDate.of(2026, 3, 29).atTime(1, 30).atZone(zone);
+        ZonedDateTime next = Instant.ofEpochMilli(daily.next(beforeGap)).atZone(zone);
+        assertEquals(3, next.getHour());
+        assertEquals(30, next.getMinute());
+        assertEquals(2, Instant.ofEpochMilli(daily.next(next)).atZone(zone).getHour());
+    }
+
     private static long field(Object value, String name) throws Exception {
         Field field = value.getClass().getDeclaredField(name);
         field.setAccessible(true);
@@ -193,6 +258,6 @@ public final class MobilVeriChecks {
     }
 
     private static void check(boolean condition, String message) {
-        if (!condition) throw new AssertionError(message);
+        assertTrue(message, condition);
     }
 }
