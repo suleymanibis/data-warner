@@ -139,7 +139,8 @@ public final class Dashboard extends Activity {
         getWindow().setStatusBarColor(Color.TRANSPARENT);
         getWindow().setNavigationBarColor(Color.TRANSPARENT);
         getWindow().setNavigationBarContrastEnforced(false);
-        WindowInsetsController bars = getWindow().getInsetsController();
+        // Android 11 needs the decor view to exist before it can provide the controller.
+        WindowInsetsController bars = getWindow().getDecorView().getWindowInsetsController();
         if (bars != null) {
             int mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
                     | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;

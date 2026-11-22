@@ -1,5 +1,9 @@
 # Data Warner changelog
 
+## v1.9.1
+
+- Fix a startup crash on Android 11 when initializing the appearance of the system bars.
+
 ## v1.9
 
 - Run Java regression checks with JUnit, with additional coverage for data plans, usage formatting, and notification timing.
